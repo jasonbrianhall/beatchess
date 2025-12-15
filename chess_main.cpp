@@ -1,15 +1,25 @@
 #include <gtk/gtk.h>
 #include <cairo.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 #include "beatchess.h"
 #include "visualization.h"
 
 #define MAX_MOVES_BEFORE_DRAW 150
 
 #define MAX_MOVE_HISTORY 256
+
+typedef enum {
+    SKILL_MORONIC = 2,
+    SKILL_EASY = 4,
+    SKILL_MEDIUM = 6,
+    SKILL_HARD = 8,
+    SKILL_EXPERT = 10
+} ChessSkillLevel;
 
 typedef struct {
     ChessGameState game_state;
@@ -23,6 +33,7 @@ typedef struct {
     GtkWidget *flip_button;
     GtkWidget *undo_button;
     GtkWidget *time_label;
+    GtkWidget *skill_combo;
     
     ChessGameState game;
     ChessThinkingState thinking_state;
@@ -57,6 +68,10 @@ typedef struct {
     double current_move_start_time;
     double last_move_end_time;
     gint time_update_source;  // Timer for updating time display
+    
+    // Skill level
+    ChessSkillLevel skill_level;
+    int last_depth_reached;  // Track the last completed search depth
 } ChessGUI;
 
 // Forward declarations
@@ -72,12 +87,45 @@ void record_move(ChessGUI *gui, ChessMove move);
 void undo_last_move(ChessGUI *gui);
 gboolean update_time_display(gpointer data);
 double get_current_time(void);
+void on_skill_changed(GtkComboBox *combo, gpointer data);
+void set_search_depth(ChessGUI *gui, ChessSkillLevel skill);
+
+// External chess engine functions
+extern void chess_start_thinking_depth(ChessThinkingState *ts, ChessGameState *game, int max_depth);
 
 // Get current time in seconds
 double get_current_time(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+// Set search depth based on skill level
+void set_search_depth(ChessGUI *gui, ChessSkillLevel skill) {
+    gui->skill_level = skill;
+    
+    // Restart thinking with new depth if game is in progress
+    if (gui->status == CHESS_PLAYING) {
+        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)skill);
+    }
+}
+
+// Handle skill level combo box change
+void on_skill_changed(GtkComboBox *combo, gpointer data) {
+    ChessGUI *gui = (ChessGUI*)data;
+    gint active = gtk_combo_box_get_active(combo);
+    
+    ChessSkillLevel skills[] = {
+        SKILL_MORONIC,
+        SKILL_EASY,
+        SKILL_MEDIUM,
+        SKILL_HARD,
+        SKILL_EXPERT
+    };
+    
+    if (active >= 0 && active < 5) {
+        set_search_depth(gui, skills[active]);
+    }
 }
 
 gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
@@ -229,9 +277,20 @@ void update_status_text(ChessGUI *gui) {
         }
     }
     
-    // Format time display
-    snprintf(time_str, sizeof(time_str), " | White: %.1fs | Black: %.1fs",
-             white_time, black_time);
+    // Read current_depth safely with mutex
+    int current_depth = 0;
+    bool is_thinking = false;
+    pthread_mutex_lock(&gui->thinking_state.lock);
+    current_depth = gui->thinking_state.current_depth;
+    is_thinking = gui->thinking_state.thinking;
+    pthread_mutex_unlock(&gui->thinking_state.lock);
+    
+    // If not thinking, show last completed depth; otherwise show current
+    int depth_to_display = is_thinking ? current_depth : gui->last_depth_reached;
+    
+    // Format time display with current depth
+    snprintf(time_str, sizeof(time_str), " | White: %.1fs | Black: %.1fs | Skill: Depth %d",
+             white_time, black_time, gui->skill_level);
     
     if (gui->status == CHESS_CHECKMATE_WHITE) {
         snprintf(status, sizeof(status), "Checkmate! Black wins! (Move %d)%s", 
@@ -350,7 +409,7 @@ void undo_last_move(ChessGUI *gui) {
     
     // Restart AI thinking if needed
     if (!gui->two_player && !gui->zero_players && gui->status == CHESS_PLAYING) {
-        chess_start_thinking(&gui->thinking_state, &gui->game);
+        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
         gui->ai_think_time = 0;
     }
     
@@ -359,8 +418,21 @@ void undo_last_move(ChessGUI *gui) {
 }
 
 void make_ai_move(ChessGUI *gui) {
-    // This stops thinking and gets whatever move has been found so far
+    
+    // Give the thinking thread a moment to complete at least depth 1
+    usleep(100000);  // 100ms delay to let thread start searching
+    
+    // Read the depth BEFORE getting the move (which stops thinking)
+    int depth_reached = 0;
+    pthread_mutex_lock(&gui->thinking_state.lock);
+    depth_reached = gui->thinking_state.current_depth;
+    int best_score = gui->thinking_state.best_score;
+    pthread_mutex_unlock(&gui->thinking_state.lock);
+    
+    // Now get the best move (this sets thinking = false)
     ChessMove ai_move = chess_get_best_move_now(&gui->thinking_state);
+    
+    fflush(stdout);
     
     if (chess_is_valid_move(&gui->game, ai_move.from_row, ai_move.from_col,
                             ai_move.to_row, ai_move.to_col)) {
@@ -380,17 +452,15 @@ void make_ai_move(ChessGUI *gui) {
             gui->status = chess_check_game_status(&gui->game);
             
             if (gui->status == CHESS_PLAYING && gui->move_count < MAX_MOVES_BEFORE_DRAW) {
-                chess_start_thinking(&gui->thinking_state, &gui->game);
+                chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
                 gui->ai_think_time = 0;  // Reset think timer
             }
         } else {
-            // Move was invalid - restart thinking
-            chess_start_thinking(&gui->thinking_state, &gui->game);
+            chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
             gui->ai_think_time = 0;
         }
     } else {
-        // Move was invalid - restart thinking  
-        chess_start_thinking(&gui->thinking_state, &gui->game);
+        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
         gui->ai_think_time = 0;
     }
     
@@ -408,7 +478,7 @@ gboolean ai_move_timeout(gpointer data) {
         gui->move_count = 0;
         gui->move_history_count = 0;
         gui->last_from_row = -1;
-        chess_start_thinking(&gui->thinking_state, &gui->game);
+        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
         gui->ai_think_time = 0;
         update_status_text(gui);
         gtk_widget_queue_draw(gui->drawing_area);
@@ -504,7 +574,7 @@ gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data
                 if (gui->status == CHESS_PLAYING && gui->move_count < MAX_MOVES_BEFORE_DRAW) {
                     if (!gui->two_player && !gui->zero_players) {
                         // Start AI thinking in single player
-                        chess_start_thinking(&gui->thinking_state, &gui->game);
+                        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
                     }
                 }
                 
@@ -560,9 +630,9 @@ void on_new_game(GtkWidget *widget, gpointer data) {
     gui->last_move_end_time = 0;
     
     if (!gui->two_player && !gui->zero_players) {
-        chess_start_thinking(&gui->thinking_state, &gui->game);
+        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
     } else if (gui->zero_players) {
-        chess_start_thinking(&gui->thinking_state, &gui->game);
+        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
     }
     
     update_status_text(gui);
@@ -625,12 +695,14 @@ int main(int argc, char *argv[]) {
     gui.move_history_count = 0;
     gui.current_move_start_time = 0;  // Don't start timer yet, will start on first move
     gui.last_move_end_time = 0;
+    gui.skill_level = SKILL_MEDIUM;  // Default to medium
+    gui.last_depth_reached = 0;  // Initialize depth tracker
     
     // Start AI thinking if not in two-player or zero-player mode initially
     if (!gui.two_player && !gui.zero_players) {
-        chess_start_thinking(&gui.thinking_state, &gui.game);
+        chess_start_thinking_depth(&gui.thinking_state, &gui.game, (int)gui.skill_level);
     } else if (gui.zero_players) {
-        chess_start_thinking(&gui.thinking_state, &gui.game);
+        chess_start_thinking_depth(&gui.thinking_state, &gui.game, (int)gui.skill_level);
     }
     
     // Create window
@@ -702,6 +774,20 @@ int main(int argc, char *argv[]) {
     g_signal_connect(gui.undo_button, "clicked", G_CALLBACK(on_undo_move), &gui);
     gtk_box_pack_start(GTK_BOX(button_hbox), gui.undo_button, FALSE, FALSE, 0);
     gtk_widget_set_sensitive(gui.undo_button, FALSE);  // Disabled at start
+    
+    // Skill level combo box
+    gui.skill_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(gui.skill_combo), "Moronic (Depth 2)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(gui.skill_combo), "Easy (Depth 4)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(gui.skill_combo), "Medium (Depth 6)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(gui.skill_combo), "Hard (Depth 8)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(gui.skill_combo), "Expert (Depth 10)");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(gui.skill_combo), 2);  // Default to Medium
+    g_signal_connect(gui.skill_combo, "changed", G_CALLBACK(on_skill_changed), &gui);
+    gtk_box_pack_start(GTK_BOX(button_hbox), gui.skill_combo, FALSE, FALSE, 0);
+    
+    // Set initial skill level
+    gui.skill_level = SKILL_MEDIUM;
     
     // Drawing area
     gui.drawing_area = gtk_drawing_area_new();

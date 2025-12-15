@@ -43,6 +43,7 @@ typedef struct {
     bool thinking;
     pthread_mutex_t lock;
     pthread_t thread;
+    int max_depth;  // Dynamic search depth
 } ChessThinkingState;
 
 typedef enum {

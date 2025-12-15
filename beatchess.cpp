@@ -575,6 +575,7 @@ void* chess_think_continuously(void* arg) {
         }
         
         ChessGameState game_copy = ts->game;
+        int max_depth = ts->max_depth;  // Read max_depth safely
         pthread_mutex_unlock(&ts->lock);
         
         ChessMove moves[256];
@@ -591,8 +592,8 @@ void* chess_think_continuously(void* arg) {
         
         //printf("THINK: Starting search for %s, %d legal moves\n",  game_copy.turn == WHITE ? "WHITE" : "BLACK", move_count);
         
-        // Iterative deepening - LIMITED TO DEPTH 4
-        for (int depth = 1; depth <= 4; depth++) {
+        // Iterative deepening with dynamic max depth
+        for (int depth = 1; depth <= max_depth; depth++) {
             ChessMove best_moves[256];
             int best_move_count = 0;
             int best_score = (game_copy.turn == WHITE) ? INT_MIN : INT_MAX;
@@ -667,17 +668,23 @@ void chess_init_thinking_state(ChessThinkingState *ts) {
     ts->has_move = false;
     ts->current_depth = 0;
     ts->best_score = 0;
+    ts->max_depth = 6;  // Default to medium depth
     pthread_mutex_init(&ts->lock, NULL);
     pthread_create(&ts->thread, NULL, chess_think_continuously, ts);
 }
 
-void chess_start_thinking(ChessThinkingState *ts, ChessGameState *game) {
+void chess_start_thinking_depth(ChessThinkingState *ts, ChessGameState *game, int max_depth) {
     pthread_mutex_lock(&ts->lock);
     ts->game = *game;
     ts->thinking = true;
     ts->has_move = false;
     ts->current_depth = 0;
+    ts->max_depth = max_depth;  // Set the depth
     pthread_mutex_unlock(&ts->lock);
+}
+
+void chess_start_thinking(ChessThinkingState *ts, ChessGameState *game) {
+    chess_start_thinking_depth(ts, game, ts->max_depth);  // Use current max_depth
 }
 
 ChessMove chess_get_best_move_now(ChessThinkingState *ts) {
