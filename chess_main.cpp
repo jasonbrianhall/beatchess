@@ -38,9 +38,15 @@ typedef struct {
     
     bool player_is_white;
     bool zero_players;  // AI vs AI mode
+    bool flip_board;    // Display board flipped
     
     int move_count;
     double ai_think_time;  // Time AI has been thinking
+    
+    // Move history for undo
+    ChessGameState *move_history;
+    int history_size;
+    int history_capacity;
 } ChessGUI;
 
 // Forward declarations
@@ -51,6 +57,10 @@ void update_status_text(ChessGUI *gui);
 void make_ai_move(ChessGUI *gui);
 gboolean ai_move_timeout(gpointer data);
 void on_menu_help(GtkMenuItem *menuitem, gpointer user_data);
+void on_flip_board(GtkWidget *widget, gpointer data);
+void on_undo_move(GtkWidget *widget, gpointer data);
+void on_toggle_player_color(GtkWidget *widget, gpointer data);
+void save_position_to_history(ChessGUI *gui);
 
 gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     ChessGUI *gui = (ChessGUI*)data;
@@ -71,14 +81,17 @@ gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         for (int c = 0; c < 8; c++) {
             bool is_light = (r + c) % 2 == 0;
             
+            int draw_row = gui->flip_board ? (7 - r) : r;
+            int draw_col = gui->flip_board ? (7 - c) : c;
+            
             if (is_light) {
                 cairo_set_source_rgb(cr, 0.9, 0.9, 0.85);
             } else {
                 cairo_set_source_rgb(cr, 0.4, 0.5, 0.4);
             }
             
-            cairo_rectangle(cr, gui->board_offset_x + c * gui->cell_size,
-                          gui->board_offset_y + r * gui->cell_size,
+            cairo_rectangle(cr, gui->board_offset_x + draw_col * gui->cell_size,
+                          gui->board_offset_y + draw_row * gui->cell_size,
                           gui->cell_size, gui->cell_size);
             cairo_fill(cr);
         }
@@ -86,22 +99,29 @@ gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     
     // Highlight selected square
     if (gui->has_selection) {
+        int draw_row = gui->flip_board ? (7 - gui->selected_row) : gui->selected_row;
+        int draw_col = gui->flip_board ? (7 - gui->selected_col) : gui->selected_col;
         cairo_set_source_rgba(cr, 1.0, 1.0, 0.0, 0.5);
-        cairo_rectangle(cr, gui->board_offset_x + gui->selected_col * gui->cell_size,
-                       gui->board_offset_y + gui->selected_row * gui->cell_size,
+        cairo_rectangle(cr, gui->board_offset_x + draw_col * gui->cell_size,
+                       gui->board_offset_y + draw_row * gui->cell_size,
                        gui->cell_size, gui->cell_size);
         cairo_fill(cr);
     }
     
     // Highlight last move
     if (gui->last_from_row >= 0) {
+        int draw_from_row = gui->flip_board ? (7 - gui->last_from_row) : gui->last_from_row;
+        int draw_from_col = gui->flip_board ? (7 - gui->last_from_col) : gui->last_from_col;
+        int draw_to_row = gui->flip_board ? (7 - gui->last_to_row) : gui->last_to_row;
+        int draw_to_col = gui->flip_board ? (7 - gui->last_to_col) : gui->last_to_col;
+        
         cairo_set_source_rgba(cr, 0.5, 0.8, 1.0, 0.3);
-        cairo_rectangle(cr, gui->board_offset_x + gui->last_from_col * gui->cell_size,
-                       gui->board_offset_y + gui->last_from_row * gui->cell_size,
+        cairo_rectangle(cr, gui->board_offset_x + draw_from_col * gui->cell_size,
+                       gui->board_offset_y + draw_from_row * gui->cell_size,
                        gui->cell_size, gui->cell_size);
         cairo_fill(cr);
-        cairo_rectangle(cr, gui->board_offset_x + gui->last_to_col * gui->cell_size,
-                       gui->board_offset_y + gui->last_to_row * gui->cell_size,
+        cairo_rectangle(cr, gui->board_offset_x + draw_to_col * gui->cell_size,
+                       gui->board_offset_y + draw_to_row * gui->cell_size,
                        gui->cell_size, gui->cell_size);
         cairo_fill(cr);
     }
@@ -130,8 +150,10 @@ gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         for (int c = 0; c < 8; c++) {
             ChessPiece piece = gui->game.board[r][c];
             if (piece.type != EMPTY) {
-                double x = gui->board_offset_x + c * gui->cell_size;
-                double y = gui->board_offset_y + r * gui->cell_size;
+                int draw_row = gui->flip_board ? (7 - r) : r;
+                int draw_col = gui->flip_board ? (7 - c) : c;
+                double x = gui->board_offset_x + draw_col * gui->cell_size;
+                double y = gui->board_offset_y + draw_row * gui->cell_size;
                 
                 cairo_save(cr);
                 cairo_translate(cr, 2, 2);
@@ -185,6 +207,9 @@ void make_ai_move(ChessGUI *gui) {
             gui->last_from_col = ai_move.from_col;
             gui->last_to_row = ai_move.to_row;
             gui->last_to_col = ai_move.to_col;
+            
+            // Save position before making move
+            save_position_to_history(gui);
             
             chess_make_move(&gui->game, ai_move);
             gui->move_count++;
@@ -265,6 +290,12 @@ gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data
     int col = (event->x - gui->board_offset_x) / gui->cell_size;
     int row = (event->y - gui->board_offset_y) / gui->cell_size;
     
+    // Handle flipped board coordinates
+    if (gui->flip_board) {
+        row = 7 - row;
+        col = 7 - col;
+    }
+    
     if (row < 0 || row >= 8 || col < 0 || col >= 8) return FALSE;
     
     if (!gui->has_selection) {
@@ -291,6 +322,9 @@ gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data
                 gui->last_from_col = gui->selected_col;
                 gui->last_to_row = row;
                 gui->last_to_col = col;
+                
+                // Save position before making move
+                save_position_to_history(gui);
                 
                 chess_make_move(&gui->game, move);
                 gui->move_count++;
@@ -334,6 +368,10 @@ void on_new_game(GtkWidget *widget, gpointer data) {
     gui->last_from_row = -1;
     gui->ai_think_time = 0;
     
+    // Reset move history
+    gui->history_size = 0;
+    save_position_to_history(gui);  // Save initial position
+    
     chess_start_thinking(&gui->thinking_state, &gui->game);
     update_status_text(gui);
     gtk_widget_queue_draw(gui->drawing_area);
@@ -345,6 +383,68 @@ void on_toggle_zero_players(GtkWidget *widget, gpointer data) {
     
     // Restart the game when toggling mode
     on_new_game(widget, data);
+}
+
+void save_position_to_history(ChessGUI *gui) {
+    // Expand history if needed
+    if (gui->history_size >= gui->history_capacity) {
+        gui->history_capacity = gui->history_capacity == 0 ? 10 : gui->history_capacity * 2;
+        gui->move_history = (ChessGameState*)realloc(gui->move_history, 
+                                                      gui->history_capacity * sizeof(ChessGameState));
+    }
+    
+    // Save current position
+    gui->move_history[gui->history_size] = gui->game;
+    gui->history_size++;
+}
+
+void on_flip_board(GtkWidget *widget, gpointer data) {
+    ChessGUI *gui = (ChessGUI*)data;
+    gui->flip_board = !gui->flip_board;
+    gtk_widget_queue_draw(gui->drawing_area);
+}
+
+void on_toggle_player_color(GtkWidget *widget, gpointer data) {
+    ChessGUI *gui = (ChessGUI*)data;
+    gui->player_is_white = !gui->player_is_white;
+    
+    // Restart the game with new color
+    on_new_game(widget, data);
+}
+
+void on_undo_move(GtkWidget *widget, gpointer data) {
+    ChessGUI *gui = (ChessGUI*)data;
+    
+    // Can only undo in single-player mode, not AI vs AI
+    if (gui->zero_players) return;
+    
+    // Need at least 2 positions to undo (one AI move + one player move)
+    if (gui->history_size < 2) {
+        gtk_label_set_text(GTK_LABEL(gui->status_label), "Nothing to undo!");
+        return;
+    }
+    
+    // Stop AI thinking
+    chess_stop_thinking(&gui->thinking_state);
+    
+    // Go back 2 moves: undo AI move and player move
+    gui->history_size -= 2;
+    gui->game = gui->move_history[gui->history_size];
+    gui->move_count -= 2;
+    
+    gui->has_selection = false;
+    gui->last_from_row = -1;
+    
+    gui->status = chess_check_game_status(&gui->game);
+    
+    // Restart AI thinking for AI's turn
+    if (gui->status == CHESS_PLAYING) {
+        chess_start_thinking(&gui->thinking_state, &gui->game);
+        gui->ai_think_time = 0;
+    }
+    
+    update_status_text(gui);
+    gtk_widget_queue_draw(gui->drawing_area);
 }
 
 int main(int argc, char *argv[]) {
@@ -359,6 +459,10 @@ int main(int argc, char *argv[]) {
     gui.zero_players = false;
     gui.last_from_row = -1;
     gui.ai_think_time = 0;
+    gui.flip_board = false;
+    gui.move_history = NULL;
+    gui.history_size = 0;
+    gui.history_capacity = 0;
     
     // Parse command line args
     for (int i = 1; i < argc; i++) {
@@ -375,6 +479,12 @@ int main(int argc, char *argv[]) {
     chess_init_thinking_state(&gui.thinking_state);
     gui.status = CHESS_PLAYING;
     gui.move_count = 0;
+    
+    // Initialize move history
+    gui.move_history = (ChessGameState*)malloc(10 * sizeof(ChessGameState));
+    gui.history_capacity = 10;
+    gui.history_size = 1;
+    gui.move_history[0] = gui.game;  // Save initial position
     
     // Start AI thinking
     chess_start_thinking(&gui.thinking_state, &gui.game);
@@ -399,6 +509,19 @@ int main(int argc, char *argv[]) {
     GtkWidget *restart_item = gtk_menu_item_new_with_label("Restart");
     g_signal_connect(restart_item, "activate", G_CALLBACK(on_new_game), &gui);
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), restart_item);
+    
+    GtkWidget *play_as_black_item = gtk_check_menu_item_new_with_label("Play as Black");
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(play_as_black_item), !gui.player_is_white);
+    g_signal_connect(play_as_black_item, "activate", G_CALLBACK(on_toggle_player_color), &gui);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), play_as_black_item);
+    
+    GtkWidget *flip_item = gtk_menu_item_new_with_label("Flip Board");
+    g_signal_connect(flip_item, "activate", G_CALLBACK(on_flip_board), &gui);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), flip_item);
+    
+    GtkWidget *undo_item = gtk_menu_item_new_with_label("Undo Move");
+    g_signal_connect(undo_item, "activate", G_CALLBACK(on_undo_move), &gui);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), undo_item);
     
     GtkWidget *zero_players_item = gtk_check_menu_item_new_with_label("AI vs AI (Zero Players)");
     gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(zero_players_item), gui.zero_players);
