@@ -168,8 +168,13 @@ void on_toggle_player_color(GtkWidget *widget, gpointer data) {
                                        !gui->player_is_white);
     }
     
-    // Start AI thinking if player is White (AI starts with Black)
-    chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
+    // Start AI thinking only if it's the AI's turn
+    // White always moves first, so:
+    // - If player_is_white = true: Player is WHITE, AI is BLACK (don't start thinking)
+    // - If player_is_white = false: Player is BLACK, AI is WHITE (start thinking)
+    if (!gui->player_is_white) {
+        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
+    }
     
     update_status_text(gui);
     gtk_widget_queue_draw(gui->drawing_area);
@@ -681,9 +686,17 @@ void on_new_game(GtkWidget *widget, gpointer data) {
     gui->current_move_start_time = 0;  // Set to 0, will start on first move
     gui->last_move_end_time = 0;
     
+    // Start AI thinking only if it's the AI's turn
     if (!gui->two_player && !gui->zero_players) {
-        chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
+        // Single-player mode: Only start AI thinking if it's the AI's turn
+        // White always moves first, so:
+        // - If player_is_white = true: Player is WHITE, AI is BLACK (don't start thinking)
+        // - If player_is_white = false: Player is BLACK, AI is WHITE (start thinking)
+        if (!gui->player_is_white) {
+            chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
+        }
     } else if (gui->zero_players) {
+        // AI vs AI mode: Always start thinking (WHITE always goes first)
         chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
     }
     
@@ -750,10 +763,17 @@ int main(int argc, char *argv[]) {
     gui.skill_level = SKILL_MEDIUM;  // Default to medium
     gui.last_depth_reached = 0;  // Initialize depth tracker
     
-    // Start AI thinking if not in two-player or zero-player mode initially
+    // Start AI thinking only if it's the AI's turn
     if (!gui.two_player && !gui.zero_players) {
-        chess_start_thinking_depth(&gui.thinking_state, &gui.game, (int)gui.skill_level);
+        // Single-player mode: Only start AI thinking if it's the AI's turn
+        // White always moves first, so:
+        // - If player_is_white = true: Player is WHITE, AI is BLACK (don't start thinking)
+        // - If player_is_white = false: Player is BLACK, AI is WHITE (start thinking)
+        if (!gui.player_is_white) {
+            chess_start_thinking_depth(&gui.thinking_state, &gui.game, (int)gui.skill_level);
+        }
     } else if (gui.zero_players) {
+        // AI vs AI mode: Always start thinking (WHITE always goes first)
         chess_start_thinking_depth(&gui.thinking_state, &gui.game, (int)gui.skill_level);
     }
     
