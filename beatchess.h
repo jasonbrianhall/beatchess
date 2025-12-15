@@ -5,8 +5,8 @@
 #include <stdbool.h>
 
 #define BOARD_SIZE 8
-#define MAX_CHESS_DEPTH 4
-#define BEAT_HISTORY_SIZE 10
+#define MAX_CHESS_DEPTH 10
+#define BEAT_HISTORY_SIZE 30
 #define MAX_MOVE_HISTORY 256
 
 typedef enum { EMPTY, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING } PieceType;
