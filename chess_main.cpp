@@ -9,8 +9,12 @@
 #include "beatchess.h"
 #include "visualization.h"
 
-#define MAX_MOVES_BEFORE_DRAW 150
+// Define fallback version if not provided by Makefile
+#ifndef VERSION
+#define VERSION "1.0"
+#endif
 
+#define MAX_MOVES_BEFORE_DRAW 150
 #define MAX_MOVE_HISTORY 256
 
 typedef enum {
@@ -34,6 +38,7 @@ typedef struct {
     GtkWidget *undo_button;
     GtkWidget *time_label;
     GtkWidget *skill_combo;
+    GtkWidget *player_color_item;  // Menu item for player color toggle
     
     ChessGameState game;
     ChessThinkingState thinking_state;
@@ -89,6 +94,8 @@ gboolean update_time_display(gpointer data);
 double get_current_time(void);
 void on_skill_changed(GtkComboBox *combo, gpointer data);
 void set_search_depth(ChessGUI *gui, ChessSkillLevel skill);
+void on_menu_help(GtkMenuItem *menuitem, gpointer user_data);  // Help menu callback
+void on_toggle_player_color(GtkWidget *widget, gpointer data);  // New: toggle player color
 
 // External chess engine functions
 extern void chess_start_thinking_depth(ChessThinkingState *ts, ChessGameState *game, int max_depth);
@@ -126,6 +133,46 @@ void on_skill_changed(GtkComboBox *combo, gpointer data) {
     if (active >= 0 && active < 5) {
         set_search_depth(gui, skills[active]);
     }
+}
+
+
+// Toggle player color (White vs Black)
+void on_toggle_player_color(GtkWidget *widget, gpointer data) {
+    ChessGUI *gui = (ChessGUI*)data;
+    
+    // Only allow in single-player mode
+    if (gui->two_player || gui->zero_players) {
+        return;
+    }
+    
+    gui->player_is_white = !gui->player_is_white;
+    
+    // Update board flip automatically: if playing Black, start with board flipped
+    gui->board_flipped = !gui->player_is_white;
+    
+    // Restart the game
+    chess_init_board(&gui->game);
+    gui->status = CHESS_PLAYING;
+    gui->move_count = 0;
+    gui->move_history_count = 0;
+    gui->has_selection = false;
+    gui->last_from_row = -1;
+    gui->ai_think_time = 0;
+    gui->white_total_time = 0;
+    gui->black_total_time = 0;
+    gui->current_move_start_time = 0;
+    
+    // Update menu item check mark
+    if (GTK_IS_CHECK_MENU_ITEM(gui->player_color_item)) {
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(gui->player_color_item), 
+                                       !gui->player_is_white);
+    }
+    
+    // Start AI thinking if player is White (AI starts with Black)
+    chess_start_thinking_depth(&gui->thinking_state, &gui->game, (int)gui->skill_level);
+    
+    update_status_text(gui);
+    gtk_widget_queue_draw(gui->drawing_area);
 }
 
 gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
@@ -285,8 +332,8 @@ void update_status_text(ChessGUI *gui) {
     is_thinking = gui->thinking_state.thinking;
     pthread_mutex_unlock(&gui->thinking_state.lock);
     
-    // If not thinking, show last completed depth; otherwise show current
-    int depth_to_display = is_thinking ? current_depth : gui->last_depth_reached;
+    // Use current or last depth for skill display (currently not used but kept for future expansion)
+    (void)(is_thinking ? current_depth : gui->last_depth_reached);
     
     // Format time display with current depth
     snprintf(time_str, sizeof(time_str), " | White: %.1fs | Black: %.1fs | Skill: Depth %d",
@@ -423,10 +470,9 @@ void make_ai_move(ChessGUI *gui) {
     usleep(100000);  // 100ms delay to let thread start searching
     
     // Read the depth BEFORE getting the move (which stops thinking)
-    int depth_reached = 0;
     pthread_mutex_lock(&gui->thinking_state.lock);
-    depth_reached = gui->thinking_state.current_depth;
-    int best_score = gui->thinking_state.best_score;
+    (void)gui->thinking_state.current_depth;  // Note: depth available but not currently displayed
+    (void)gui->thinking_state.best_score;     // Note: best_score available but not currently displayed
     pthread_mutex_unlock(&gui->thinking_state.lock);
     
     // Now get the best move (this sets thinking = false)
@@ -621,7 +667,13 @@ void on_new_game(GtkWidget *widget, gpointer data) {
     gui->has_selection = false;
     gui->last_from_row = -1;
     gui->ai_think_time = 0;
-    gui->board_flipped = false;
+    
+    // Only reset board flip if in single-player, otherwise keep current state
+    if (!gui->two_player && !gui->zero_players) {
+        gui->board_flipped = !gui->player_is_white;
+    } else {
+        gui->board_flipped = false;
+    }
     
     // Reset time tracking - do NOT start timer yet
     gui->white_total_time = 0;
@@ -707,7 +759,7 @@ int main(int argc, char *argv[]) {
     
     // Create window
     gui.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(gui.window), "Chess");
+    gtk_window_set_title(GTK_WINDOW(gui.window), "BeatChess");
     gtk_window_set_default_size(GTK_WINDOW(gui.window), 600, 750);
     g_signal_connect(gui.window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
     
@@ -718,7 +770,7 @@ int main(int argc, char *argv[]) {
     // Create menu bar
     GtkWidget *menu_bar = gtk_menu_bar_new();
     
-    // File menu
+    // === FILE MENU ===
     GtkWidget *file_menu = gtk_menu_new();
     GtkWidget *file_item = gtk_menu_item_new_with_label("File");
     
@@ -728,6 +780,15 @@ int main(int argc, char *argv[]) {
     
     GtkWidget *separator1 = gtk_separator_menu_item_new();
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), separator1);
+    
+    // Player color toggle (NEW)
+    gui.player_color_item = gtk_check_menu_item_new_with_label("Play as Black");
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(gui.player_color_item), !gui.player_is_white);
+    g_signal_connect(gui.player_color_item, "activate", G_CALLBACK(on_toggle_player_color), &gui);
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), gui.player_color_item);
+    
+    GtkWidget *separator2 = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), separator2);
     
     GtkWidget *two_player_item = gtk_check_menu_item_new_with_label("Two-Player Mode");
     gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(two_player_item), gui.two_player);
@@ -739,8 +800,8 @@ int main(int argc, char *argv[]) {
     g_signal_connect(zero_players_item, "activate", G_CALLBACK(on_toggle_zero_players), &gui);
     gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), zero_players_item);
     
-    GtkWidget *separator2 = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), separator2);
+    GtkWidget *separator3 = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), separator3);
     
     GtkWidget *quit_item = gtk_menu_item_new_with_label("Quit");
     g_signal_connect(quit_item, "activate", G_CALLBACK(gtk_main_quit), NULL);
@@ -748,6 +809,17 @@ int main(int argc, char *argv[]) {
     
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_item), file_menu);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_item);
+    
+    // === HELP MENU (NEW) ===
+    GtkWidget *help_menu = gtk_menu_new();
+    GtkWidget *help_item = gtk_menu_item_new_with_label("Help");
+    
+    GtkWidget *help_about_item = gtk_menu_item_new_with_label("Help & About");
+    g_signal_connect(help_about_item, "activate", G_CALLBACK(on_menu_help), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(help_menu), help_about_item);
+    
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(help_item), help_menu);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), help_item);
     
     gtk_box_pack_start(GTK_BOX(main_vbox), menu_bar, FALSE, FALSE, 0);
     
