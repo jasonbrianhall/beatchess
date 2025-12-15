@@ -8,169 +8,6 @@
 #include <unistd.h>
 
 // ============================================================================
-// ADVANCED MOVE ORDERING AND TACTICAL DETECTION
-// ============================================================================
-
-typedef struct {
-    ChessMove move;
-    int score;
-} ScoredMove;
-
-static int compare_scored_moves(const void *a, const void *b) {
-    int score_a = ((ScoredMove*)a)->score;
-    int score_b = ((ScoredMove*)b)->score;
-    return score_b - score_a;
-}
-
-bool is_piece_hanging(ChessGameState *game, int row, int col) {
-    ChessPiece piece = game->board[row][col];
-    if (piece.type == EMPTY) return false;
-    
-    int piece_values[] = {0, 100, 320, 330, 500, 900, 20000};
-    int piece_value = piece_values[piece.type];
-    
-    for (int r = 0; r < 8; r++) {
-        for (int c = 0; c < 8; c++) {
-            if (game->board[r][c].color != piece.color && game->board[r][c].type != EMPTY) {
-                if (chess_is_valid_move(game, r, c, row, col)) {
-                    int attacker_value = piece_values[game->board[r][c].type];
-                    if (attacker_value <= piece_value) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    return false;
-}
-
-int count_attackers(ChessGameState *game, int row, int col, ChessColor color) {
-    int count = 0;
-    for (int r = 0; r < 8; r++) {
-        for (int c = 0; c < 8; c++) {
-            if (game->board[r][c].color == color && game->board[r][c].type != EMPTY) {
-                if (chess_is_valid_move(game, r, c, row, col)) {
-                    count++;
-                }
-            }
-        }
-    }
-    return count;
-}
-
-int estimate_move_value(ChessGameState *game, ChessMove move) {
-    int score = 0;
-    int piece_values[] = {0, 100, 320, 330, 500, 900, 20000};
-    
-    ChessPiece attacker = game->board[move.from_row][move.from_col];
-    ChessPiece target = game->board[move.to_row][move.to_col];
-    
-    if (target.type != EMPTY) {
-        int target_value = piece_values[target.type];
-        int attacker_value = piece_values[attacker.type];
-        
-        if (target_value > attacker_value) {
-            score += 10000 + target_value;
-        } else if (target_value == attacker_value) {
-            score += 5000 + target_value;
-        } else {
-            score += 1000 + target_value;
-        }
-        
-        int protectors = count_attackers(game, move.to_row, move.to_col, game->turn);
-        if (protectors == 0) {
-            score += 500;
-        }
-    }
-    
-    if (attacker.type == PAWN) {
-        if ((attacker.color == WHITE && move.to_row == 0) ||
-            (attacker.color == BLACK && move.to_row == 7)) {
-            score += 8000;
-        }
-    }
-    
-    ChessGameState temp = *game;
-    chess_make_move(&temp, move);
-    if (chess_is_in_check(&temp, (game->turn == WHITE) ? BLACK : WHITE)) {
-        score += 200;
-    }
-    
-    if (target.type != EMPTY && is_piece_hanging(game, move.to_row, move.to_col)) {
-        score += 300;
-    }
-    
-    if (attacker.type != PAWN && attacker.type != KING && target.type == EMPTY) {
-        int center_dist_before = abs(move.from_row - 3.5) + abs(move.from_col - 3.5);
-        int center_dist_after = abs(move.to_row - 3.5) + abs(move.to_col - 3.5);
-        if (center_dist_after < center_dist_before) {
-            score += 10;
-        }
-    }
-    
-    return score;
-}
-
-void order_moves(ChessGameState *game, ChessMove *moves, int move_count) {
-    ScoredMove scored_moves[256];
-    
-    for (int i = 0; i < move_count; i++) {
-        scored_moves[i].move = moves[i];
-        scored_moves[i].score = estimate_move_value(game, moves[i]);
-    }
-    
-    qsort(scored_moves, move_count, sizeof(ScoredMove), compare_scored_moves);
-    
-    for (int i = 0; i < move_count; i++) {
-        moves[i] = scored_moves[i].move;
-    }
-}
-
-// Quiescence search - continue searching forcing moves after depth limit
-int chess_quiescence(ChessGameState *game, int alpha, int beta, bool maximizing) {
-    int stand_pat = chess_evaluate_position(game);
-    
-    if (maximizing) {
-        if (stand_pat >= beta) return beta;
-        alpha = (alpha > stand_pat) ? alpha : stand_pat;
-    } else {
-        if (stand_pat <= alpha) return alpha;
-        beta = (beta < stand_pat) ? beta : stand_pat;
-    }
-    
-    ChessMove moves[256];
-    int move_count = chess_get_all_moves(game, game->turn, moves);
-    
-    for (int i = 0; i < move_count; i++) {
-        ChessPiece target = game->board[moves[i].to_row][moves[i].to_col];
-        
-        bool is_capture = (target.type != EMPTY);
-        bool is_check = false;
-        
-        if (!is_capture) {
-            ChessGameState temp = *game;
-            chess_make_move(&temp, moves[i]);
-            is_check = chess_is_in_check(&temp, (game->turn == WHITE) ? BLACK : WHITE);
-            if (!is_check) continue;
-        }
-        
-        ChessGameState temp = *game;
-        chess_make_move(&temp, moves[i]);
-        int eval = chess_quiescence(&temp, alpha, beta, !maximizing);
-        
-        if (maximizing) {
-            if (eval > alpha) alpha = eval;
-            if (beta <= alpha) return beta;
-        } else {
-            if (eval < beta) beta = eval;
-            if (beta <= alpha) return alpha;
-        }
-    }
-    
-    return maximizing ? alpha : beta;
-}
-
-// ============================================================================
 // CORE CHESS ENGINE
 // ============================================================================
 
@@ -650,7 +487,8 @@ int chess_evaluate_position(ChessGameState *game) {
     if (white_bishops >= 2) score += 30;
     if (black_bishops >= 2) score -= 30;
     
-    // No random factor - evaluation should be deterministic for better play
+    // Small random factor for variety
+    score += (rand() % 10) - 5;
     
     return score;
 }
@@ -693,12 +531,8 @@ int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool max
     }
     
     if (depth == 0) {
-        // Use quiescence search instead of static evaluation
-        return chess_quiescence(game, INT_MIN, INT_MAX, maximizing);
+        return chess_evaluate_position(game);
     }
-    
-    // Advanced move ordering
-    order_moves(game, moves, move_count);
     
     if (maximizing) {
         int max_eval = INT_MIN;
@@ -741,7 +575,6 @@ void* chess_think_continuously(void* arg) {
         }
         
         ChessGameState game_copy = ts->game;
-        int max_depth = ts->max_depth;  // Read max_depth safely
         pthread_mutex_unlock(&ts->lock);
         
         ChessMove moves[256];
@@ -758,11 +591,8 @@ void* chess_think_continuously(void* arg) {
         
         //printf("THINK: Starting search for %s, %d legal moves\n",  game_copy.turn == WHITE ? "WHITE" : "BLACK", move_count);
         
-        // Advanced move ordering on root moves
-        order_moves(&game_copy, moves, move_count);
-        
-        // Iterative deepening with dynamic max depth
-        for (int depth = 1; depth <= max_depth; depth++) {
+        // Iterative deepening - LIMITED TO DEPTH 4
+        for (int depth = 1; depth <= 4; depth++) {
             ChessMove best_moves[256];
             int best_move_count = 0;
             int best_score = (game_copy.turn == WHITE) ? INT_MIN : INT_MAX;
@@ -782,7 +612,7 @@ void* chess_think_continuously(void* arg) {
                 ChessGameState temp = game_copy;
                 chess_make_move(&temp, moves[i]);
                 int score = chess_minimax(&temp, depth - 1, INT_MIN, INT_MAX, 
-                                         game_copy.turn == WHITE);
+                                         game_copy.turn == BLACK);
                 
                 if (game_copy.turn == WHITE) {
                     if (score > best_score) {
@@ -837,23 +667,17 @@ void chess_init_thinking_state(ChessThinkingState *ts) {
     ts->has_move = false;
     ts->current_depth = 0;
     ts->best_score = 0;
-    ts->max_depth = 6;  // Default, but overridden by chess_start_thinking_depth() calls
     pthread_mutex_init(&ts->lock, NULL);
     pthread_create(&ts->thread, NULL, chess_think_continuously, ts);
 }
 
-void chess_start_thinking_depth(ChessThinkingState *ts, ChessGameState *game, int max_depth) {
+void chess_start_thinking(ChessThinkingState *ts, ChessGameState *game) {
     pthread_mutex_lock(&ts->lock);
     ts->game = *game;
     ts->thinking = true;
     ts->has_move = false;
     ts->current_depth = 0;
-    ts->max_depth = max_depth;  // Set the depth
     pthread_mutex_unlock(&ts->lock);
-}
-
-void chess_start_thinking(ChessThinkingState *ts, ChessGameState *game) {
-    chess_start_thinking_depth(ts, game, ts->max_depth);  // Use current max_depth
 }
 
 ChessMove chess_get_best_move_now(ChessThinkingState *ts) {
@@ -1020,8 +844,8 @@ void init_beat_chess_system(void *vis_ptr) {
     chess_init_thinking_state(&chess->thinking_state);
     chess->status = CHESS_PLAYING;
     
-    // Don't start thinking yet - wait until mode is selected
-    // It will be started when player clicks the PvsA button or when AI vs AI begins
+    // Start first player thinking
+    chess_start_thinking(&chess->thinking_state, &chess->game);
     
     // Initialize animation positions
     for (int r = 0; r < BOARD_SIZE; r++) {
@@ -1200,12 +1024,8 @@ void update_beat_chess(void *vis_ptr, double dt) {
         
         chess->reset_button_glow = 1.0;
         
-        // Start thinking for new game - but only for AI's turn in Player vs AI mode
-        if (!chess->player_vs_ai) {
-            // AI vs AI: start thinking
-            chess_start_thinking(&chess->thinking_state, &chess->game);
-        }
-        // In Player vs AI mode: don't start thinking yet - wait for AI's turn
+        // Start thinking for new game
+        chess_start_thinking(&chess->thinking_state, &chess->game);
     }
     // ========================================
     
@@ -1259,12 +1079,8 @@ void update_beat_chess(void *vis_ptr, double dt) {
         chess->status_flash_timer = 2.0;
         chess->pvsa_button_glow = 1.0;
         
-        // Start thinking for new game - but only for AI's turn in Player vs AI mode
-        if (!chess->player_vs_ai) {
-            // AI vs AI: start thinking for current position (WHITE's turn at start)
-            chess_start_thinking(&chess->thinking_state, &chess->game);
-        }
-        // In Player vs AI mode: don't start thinking yet - wait for AI's turn (BLACK)
+        // Start thinking for new game
+        chess_start_thinking(&chess->thinking_state, &chess->game);
     }
     // ===============================================
     
@@ -1384,9 +1200,6 @@ void update_beat_chess(void *vis_ptr, double dt) {
         ChessColor player_color = chess->board_flipped ? BLACK : WHITE;
         
         if (chess->game.turn == player_color) {
-            // Player's turn - stop AI thinking to free CPU
-            chess_stop_thinking(&chess->thinking_state);
-            
         // Get which square the mouse is over
         double cell = chess->cell_size;
         double ox = chess->board_offset_x;
@@ -1581,37 +1394,25 @@ void update_beat_chess(void *vis_ptr, double dt) {
     // Handle game over
     if (chess->status != CHESS_PLAYING) {
         if (chess->waiting_for_restart) {
-            // Reset clocks immediately when game ends
-            if (chess->beats_since_game_over == 0) {
-                chess->white_total_time = 0.0;
-                chess->black_total_time = 0.0;
-            }
-            
-            // Wait for White's first move before restarting
-            // Initialize board but keep game in paused state
-            if (chess->beats_since_game_over == 0) {
-                chess_init_board(&chess->game);
-                chess->move_count = 0;
-                chess->eval_bar_position = 0;
-                chess->eval_bar_target = 0;
-                chess->time_thinking = 0;
-                strcpy(chess->status_text, "Waiting for White to move...");
-                chess->status_flash_color[0] = 0.0;
-                chess->status_flash_color[1] = 1.0;
-                chess->status_flash_color[2] = 1.0;
-                chess->status_flash_timer = 1.0;
-            }
-            
             if (beat_chess_detect_beat(vis)) {
                 chess->beats_since_game_over++;
                 chess->time_since_last_move = 0;
                 
-                if (chess->beats_since_game_over >= 1) {
-                    // Start game on first beat after game over
+                if (chess->beats_since_game_over >= 2) {
+                    // Restart game
+                    chess_init_board(&chess->game);
                     chess->status = CHESS_PLAYING;
                     chess->beats_since_game_over = 0;
                     chess->waiting_for_restart = false;
-                    strcpy(chess->status_text, "Game started! White thinking...");
+                    chess->move_count = 0;
+                    chess->eval_bar_position = 0;
+                    chess->eval_bar_target = 0;
+                    chess->time_thinking = 0;
+                    strcpy(chess->status_text, "New game! White to move");
+                    chess->status_flash_color[0] = 0.0;
+                    chess->status_flash_color[1] = 1.0;
+                    chess->status_flash_color[2] = 1.0;
+                    chess->status_flash_timer = 1.0;
                     
                     chess_start_thinking(&chess->thinking_state, &chess->game);
                 }
@@ -1681,11 +1482,6 @@ void update_beat_chess(void *vis_ptr, double dt) {
     }
     
     if (should_make_move) {
-        // If Player vs AI and it's AI's turn, stop any leftover thinking
-        if (chess->player_vs_ai) {
-            chess_stop_thinking(&chess->thinking_state);
-        }
-        
         // Get current evaluation
         int eval_before = chess_evaluate_position(&chess->game);
         
@@ -1835,12 +1631,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
             }
         } else {
             // Start thinking for next move
-            // In Player vs AI mode: only think if it's AI's turn
-            // Determine AI color based on board flip
-            ChessColor ai_color_local = chess->board_flipped ? WHITE : BLACK;
-            if (!chess->player_vs_ai || chess->game.turn == ai_color_local) {
-                chess_start_thinking(&chess->thinking_state, &chess->game);
-            }
+            chess_start_thinking(&chess->thinking_state, &chess->game);
         }
     }
 }
