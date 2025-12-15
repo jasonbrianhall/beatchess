@@ -50,6 +50,7 @@ gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data
 void update_status_text(ChessGUI *gui);
 void make_ai_move(ChessGUI *gui);
 gboolean ai_move_timeout(gpointer data);
+void on_menu_help(GtkMenuItem *menuitem, gpointer user_data);
 
 gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     ChessGUI *gui = (ChessGUI*)data;
@@ -413,6 +414,17 @@ int main(int argc, char *argv[]) {
     
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_item), file_menu);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_item);
+    
+    // Help menu
+    GtkWidget *help_menu = gtk_menu_new();
+    GtkWidget *help_item = gtk_menu_item_new_with_label("Help");
+    
+    GtkWidget *help_contents = gtk_menu_item_new_with_label("Help Contents");
+    g_signal_connect(help_contents, "activate", G_CALLBACK(on_menu_help), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(help_menu), help_contents);
+    
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(help_item), help_menu);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), help_item);
     
     gtk_box_pack_start(GTK_BOX(main_vbox), menu_bar, FALSE, FALSE, 0);
     
