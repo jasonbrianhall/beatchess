@@ -7,9 +7,7 @@
 #include "beatchess.h"
 #include "visualization.h"
 
-#ifndef MAX_MOVES_BEFORE_DRAW
 #define MAX_MOVES_BEFORE_DRAW 150
-#endif
 
 #define MAX_MOVE_HISTORY 256
 
@@ -24,6 +22,7 @@ typedef struct {
     GtkWidget *status_label;
     GtkWidget *flip_button;
     GtkWidget *undo_button;
+    GtkWidget *time_label;
     
     ChessGameState game;
     ChessThinkingState thinking_state;
@@ -51,6 +50,13 @@ typedef struct {
     // Move history for undo
     MoveHistoryEntry move_history[MAX_MOVE_HISTORY];
     int move_history_count;
+    
+    // Time tracking
+    double white_total_time;
+    double black_total_time;
+    double current_move_start_time;
+    double last_move_end_time;
+    gint time_update_source;  // Timer for updating time display
 } ChessGUI;
 
 // Forward declarations
@@ -64,6 +70,15 @@ void on_flip_board(GtkWidget *widget, gpointer data);
 void on_undo_move(GtkWidget *widget, gpointer data);
 void record_move(ChessGUI *gui, ChessMove move);
 void undo_last_move(ChessGUI *gui);
+gboolean update_time_display(gpointer data);
+double get_current_time(void);
+
+// Get current time in seconds
+double get_current_time(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
 
 gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     ChessGUI *gui = (ChessGUI*)data;
@@ -192,23 +207,51 @@ gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
 }
 
 void update_status_text(ChessGUI *gui) {
-    char status[256];
+    char status[512];
+    char time_str[256];
+    
+    // Calculate current move time
+    double current_move_time = 0;
+    if (gui->current_move_start_time > 0) {
+        current_move_time = get_current_time() - gui->current_move_start_time;
+    }
+    
+    // Get current player's time
+    double white_time = gui->white_total_time;
+    double black_time = gui->black_total_time;
+    
+    // Add current move time if still thinking and timer started
+    if (gui->current_move_start_time > 0) {
+        if (gui->game.turn == WHITE) {
+            white_time += current_move_time;
+        } else {
+            black_time += current_move_time;
+        }
+    }
+    
+    // Format time display
+    snprintf(time_str, sizeof(time_str), " | White: %.1fs | Black: %.1fs",
+             white_time, black_time);
     
     if (gui->status == CHESS_CHECKMATE_WHITE) {
-        snprintf(status, sizeof(status), "Checkmate! Black wins! (Move %d)", gui->move_count);
+        snprintf(status, sizeof(status), "Checkmate! Black wins! (Move %d)%s", 
+                gui->move_count, time_str);
     } else if (gui->status == CHESS_CHECKMATE_BLACK) {
-        snprintf(status, sizeof(status), "Checkmate! White wins! (Move %d)", gui->move_count);
+        snprintf(status, sizeof(status), "Checkmate! White wins! (Move %d)%s",
+                gui->move_count, time_str);
     } else if (gui->status == CHESS_STALEMATE) {
-        snprintf(status, sizeof(status), "Stalemate! Draw! (Move %d)", gui->move_count);
+        snprintf(status, sizeof(status), "Stalemate! Draw! (Move %d)%s",
+                gui->move_count, time_str);
     } else if (gui->move_count >= MAX_MOVES_BEFORE_DRAW) {
-        snprintf(status, sizeof(status), "Draw by move limit! (Move %d)", gui->move_count);
+        snprintf(status, sizeof(status), "Draw by move limit! (Move %d)%s",
+                gui->move_count, time_str);
     } else {
         if (chess_is_in_check(&gui->game, gui->game.turn)) {
-            snprintf(status, sizeof(status), "Move %d - %s to move (CHECK!)",
-                    gui->move_count, gui->game.turn == WHITE ? "White" : "Black");
+            snprintf(status, sizeof(status), "Move %d - %s to move (CHECK!)%s",
+                    gui->move_count, gui->game.turn == WHITE ? "White" : "Black", time_str);
         } else {
-            snprintf(status, sizeof(status), "Move %d - %s to move",
-                    gui->move_count, gui->game.turn == WHITE ? "White" : "Black");
+            snprintf(status, sizeof(status), "Move %d - %s to move%s",
+                    gui->move_count, gui->game.turn == WHITE ? "White" : "Black", time_str);
         }
     }
     
@@ -221,15 +264,44 @@ void update_status_text(ChessGUI *gui) {
     gtk_widget_set_sensitive(gui->flip_button, !gui->zero_players);
 }
 
+gboolean update_time_display(gpointer data) {
+    ChessGUI *gui = (ChessGUI*)data;
+    
+    if (gui->status == CHESS_PLAYING) {
+        update_status_text(gui);
+        gtk_widget_queue_draw(gui->drawing_area);
+    }
+    
+    return G_SOURCE_CONTINUE;
+}
+
 void record_move(ChessGUI *gui, ChessMove move) {
     if (gui->move_history_count >= MAX_MOVE_HISTORY) {
         return;  // History full
+    }
+    
+    // Start timer on first move
+    if (gui->current_move_start_time == 0) {
+        gui->current_move_start_time = get_current_time();
+    }
+    
+    // Record time for current move (only after first move)
+    if (gui->move_history_count > 0 && gui->current_move_start_time > 0) {
+        double move_time = get_current_time() - gui->current_move_start_time;
+        if (gui->game.turn == WHITE) {
+            gui->white_total_time += move_time;
+        } else {
+            gui->black_total_time += move_time;
+        }
     }
     
     MoveHistoryEntry *entry = &gui->move_history[gui->move_history_count];
     entry->game_state = gui->game;
     entry->move = move;
     gui->move_history_count++;
+    
+    // Start timer for next move
+    gui->current_move_start_time = get_current_time();
 }
 
 void undo_last_move(ChessGUI *gui) {
@@ -237,20 +309,44 @@ void undo_last_move(ChessGUI *gui) {
         return;  // Can't undo
     }
     
-    // Move back to previous state
-    gui->move_history_count--;
-    gui->game = gui->move_history[gui->move_history_count].game_state;
-    gui->move_count--;
-    gui->has_selection = false;
-    
-    gui->status = chess_check_game_status(&gui->game);
-    
-    // If in single-player mode, undo AI move too
-    if (!gui->two_player && !gui->zero_players && gui->move_history_count > 0) {
+    if (!gui->two_player && !gui->zero_players) {
+        // Single-player: undo both AI's move and human's move
+        // move_history stores state AFTER each move
+        // If we have 2+ moves: [0]=after human move, [1]=after AI move
+        // We want to go back to the state BEFORE the human move
+        if (gui->move_history_count < 2) {
+            return;  // Can't undo - need both human and AI moves
+        }
+        
+        // To go back before human's move, restore state from move_history[0] before decrement
+        // Actually, we need to go back to the original position, which is before index 0
+        // So we need to reconstruct by going back 2 in the count
+        gui->move_history_count -= 2;
+        
+        // Restore to state before both moves (index will be 0 positions back if count was 2)
+        if (gui->move_history_count > 0) {
+            gui->game = gui->move_history[gui->move_history_count - 1].game_state;
+        } else {
+            // If no more moves, reset to starting position
+            chess_init_board(&gui->game);
+        }
+        gui->move_count -= 2;
+    } else {
+        // Two-player or AI vs AI: just undo one move
         gui->move_history_count--;
-        gui->game = gui->move_history[gui->move_history_count].game_state;
+        if (gui->move_history_count > 0) {
+            gui->game = gui->move_history[gui->move_history_count - 1].game_state;
+        } else {
+            chess_init_board(&gui->game);
+        }
         gui->move_count--;
     }
+    
+    gui->has_selection = false;
+    gui->status = chess_check_game_status(&gui->game);
+    
+    // Reset time tracking for next move
+    gui->current_move_start_time = get_current_time();
     
     // Restart AI thinking if needed
     if (!gui->two_player && !gui->zero_players && gui->status == CHESS_PLAYING) {
@@ -457,6 +553,12 @@ void on_new_game(GtkWidget *widget, gpointer data) {
     gui->ai_think_time = 0;
     gui->board_flipped = false;
     
+    // Reset time tracking - do NOT start timer yet
+    gui->white_total_time = 0;
+    gui->black_total_time = 0;
+    gui->current_move_start_time = 0;  // Set to 0, will start on first move
+    gui->last_move_end_time = 0;
+    
     if (!gui->two_player && !gui->zero_players) {
         chess_start_thinking(&gui->thinking_state, &gui->game);
     } else if (gui->zero_players) {
@@ -498,6 +600,8 @@ int main(int argc, char *argv[]) {
     gui.board_flipped = false;
     gui.last_from_row = -1;
     gui.ai_think_time = 0;
+    gui.white_total_time = 0;
+    gui.black_total_time = 0;
     
     // Parse command line args
     for (int i = 1; i < argc; i++) {
@@ -519,6 +623,8 @@ int main(int argc, char *argv[]) {
     gui.status = CHESS_PLAYING;
     gui.move_count = 0;
     gui.move_history_count = 0;
+    gui.current_move_start_time = 0;  // Don't start timer yet, will start on first move
+    gui.last_move_end_time = 0;
     
     // Start AI thinking if not in two-player or zero-player mode initially
     if (!gui.two_player && !gui.zero_players) {
@@ -609,6 +715,9 @@ int main(int argc, char *argv[]) {
     
     // Start AI move timer (1 second delay between moves)
     g_timeout_add(1000, ai_move_timeout, &gui);
+    
+    // Start time display update timer (100ms updates)
+    gui.time_update_source = g_timeout_add(100, update_time_display, &gui);
     
     gtk_main();
     
