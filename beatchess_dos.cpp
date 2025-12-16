@@ -1,3 +1,8 @@
+/*
+ * beatchess_dos_enhanced.cpp - BeatChess DOS/Allegro 4 with Menu System
+ * Enhanced version with File menu and side buttons
+ */
+
 #include <allegro.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,13 +53,14 @@ typedef struct {
     int selected_row, selected_col;
     bool piece_selected;
     
-    /* History */
+    /* History - dynamic allocation (safer for DOS stack limits) */
     ChessGameState *history;
     int history_size;
     int history_capacity;
     
     /* UI state */
     bool show_help;
+    bool show_about;
     bool show_menu;
     int menu_selected;
     bool ai_vs_ai;
@@ -126,6 +132,7 @@ const char *menu_items[] = {
     "Swap Color   B",
     "",  /* separator */
     "Help         ?",
+    "About...",
     "",  /* separator */
     "Quit         Q"
 };
@@ -160,33 +167,45 @@ static void cleanup_chess_game() {
 }
 
 static void init_chess_game() {
-    /* Save history pointer before clearing */
+    /* Save settings that should persist across new games */
+    bool saved_ai_vs_ai = chess_gui.ai_vs_ai;
+    bool saved_player_is_white = chess_gui.player_is_white;
     ChessGameState *saved_history = chess_gui.history;
     int saved_capacity = chess_gui.history_capacity;
     
-    /* Clear the entire structure to reset all state */
-    memset(&chess_gui, 0, sizeof(ChessGUI));
+    /* DON'T use memset on the entire structure - it's too large and causes issues */
+    /* Instead, manually reset only the fields we need to reset */
     
-    /* Restore history pointer if it existed */
+    /* Restore/set saved values first */
+    chess_gui.ai_vs_ai = saved_ai_vs_ai;
+    chess_gui.player_is_white = saved_player_is_white;
     chess_gui.history = saved_history;
     chess_gui.history_capacity = saved_capacity;
     
     /* Initialize board */
     chess_init_board(&chess_gui.game);
     
-    /* Set defaults */
+    /* Reset UI state */
     chess_gui.selected_row = -1;
     chess_gui.selected_col = -1;
     chess_gui.piece_selected = false;
     chess_gui.show_help = false;
+    chess_gui.show_about = false;
     chess_gui.show_menu = false;
     chess_gui.menu_selected = -1;
+    
+    /* Reset AI state completely */
     chess_gui.ai_move_counter = 0;
-    chess_gui.ai_move_delay = 15;  /* Frames to wait before AI moves */
+    chess_gui.ai_move_delay = 15;
     chess_gui.ai_thinking = false;
     chess_gui.ai_search_depth = 0;
     chess_gui.ai_total_moves = 0;
     chess_gui.ai_evaluated_moves = 0;
+    chess_gui.ai_best_move.from_row = -1;
+    chess_gui.ai_best_move.from_col = -1;
+    chess_gui.ai_best_move.to_row = -1;
+    chess_gui.ai_best_move.to_col = -1;
+    chess_gui.ai_best_move.score = 0;
     
     /* Reset timers */
     chess_gui.white_time_seconds = 0;
@@ -194,10 +213,11 @@ static void init_chess_game() {
     chess_gui.black_time_seconds = 0;
     chess_gui.black_time_frames = 0;
     chess_gui.timer_started = false;
+    chess_gui.ai_thinking_start_time = 0;
     
-    /* Initialize history if it doesn't exist, otherwise just reset it */
+    /* Allocate history ONLY if it doesn't exist (first time only) */
     if (!chess_gui.history) {
-        chess_gui.history_capacity = 200;
+        chess_gui.history_capacity = 100;
         chess_gui.history = (ChessGameState *)malloc(sizeof(ChessGameState) * chess_gui.history_capacity);
         if (!chess_gui.history) {
             printf("ERROR: Failed to allocate history buffer\n");
@@ -205,13 +225,11 @@ static void init_chess_game() {
         }
     }
     
-    /* Just reset the history size instead of reallocating */
+    /* Reset history size (reuse existing buffer) */
     chess_gui.history_size = 0;
     
     /* Save initial position */
-    if (chess_gui.history_size < chess_gui.history_capacity) {
-        chess_gui.history[chess_gui.history_size++] = chess_gui.game;
-    }
+    chess_gui.history[chess_gui.history_size++] = chess_gui.game;
 }
 
 static void save_position_to_history() {
@@ -220,13 +238,11 @@ static void save_position_to_history() {
         return;  /* Can't save if no buffer or buffer is full */
     }
     
-    if (chess_gui.history_size < chess_gui.history_capacity) {
-        chess_gui.history[chess_gui.history_size++] = chess_gui.game;
-        
-        /* Start timer after white's first move (move 2 in history = after first move) */
-        if (chess_gui.history_size == 2) {
-            chess_gui.timer_started = true;
-        }
+    chess_gui.history[chess_gui.history_size++] = chess_gui.game;
+    
+    /* Start timer after white's first move (move 2 in history = after first move) */
+    if (chess_gui.history_size == 2) {
+        chess_gui.timer_started = true;
     }
 }
 
@@ -412,7 +428,7 @@ static void draw_menu_bar() {
     rectfill(screen, 0, 0, 640, MENU_BAR_HEIGHT, COLOR_BLUE);
     
     /* File menu */
-    textout_ex(screen, font, "File", 5, 5, COLOR_WHITE, -1);
+    textout_ex(screen, font, "Game", 5, 5, COLOR_WHITE, -1);
     
     /* Title */
     textout_ex(screen, font, "BeatChess - DOS Edition", 200, 5, COLOR_YELLOW, -1);
@@ -641,6 +657,36 @@ static void draw_help_screen() {
     draw_text_center(320, y + 20, COLOR_GREEN, "Press any key to continue...");
 }
 
+static void draw_about_screen() {
+    int y = 80;
+    
+    rectfill(screen, 0, 0, 640, 480, COLOR_BLACK);
+    
+    draw_text_center(320, y, COLOR_YELLOW, "BeatChess");
+    y += 20;
+    draw_text_center(320, y, COLOR_WHITE, "DOS Edition");
+    y += 40;
+    
+    draw_text_center(320, y, COLOR_CYAN, "Copyright (c) 2025 Jason Brian Hall");
+    y += 30;
+    
+    draw_text_center(320, y, COLOR_GREEN, "MIT License");
+    y += 30;
+    
+    draw_text(80, y, COLOR_WHITE, "Permission is hereby granted, free of charge, to any person"); y += 15;
+    draw_text(80, y, COLOR_WHITE, "obtaining a copy of this software and associated documentation"); y += 15;
+    draw_text(80, y, COLOR_WHITE, "files (the \"Software\"), to deal in the Software without"); y += 15;
+    draw_text(80, y, COLOR_WHITE, "restriction, including without limitation the rights to use,"); y += 15;
+    draw_text(80, y, COLOR_WHITE, "copy, modify, merge, publish, distribute, sublicense, and/or"); y += 15;
+    draw_text(80, y, COLOR_WHITE, "sell copies of the Software, and to permit persons to whom the"); y += 15;
+    draw_text(80, y, COLOR_WHITE, "Software is furnished to do so, subject to the following"); y += 15;
+    draw_text(80, y, COLOR_WHITE, "conditions:"); y += 25;
+    
+    draw_text(80, y, COLOR_WHITE, "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND."); y += 30;
+    
+    draw_text_center(320, y + 20, COLOR_GREEN, "Press any key to continue...");
+}
+
 /* ============================================================================
  * Menu and button handling
  * ============================================================================
@@ -672,7 +718,11 @@ static int execute_menu_action(int index) {
             chess_gui.show_help = true;
             return 1;  /* Continue */
             
-        case 8:  /* Quit */
+        case 7:  /* About */
+            chess_gui.show_about = true;
+            return 1;  /* Continue */
+            
+        case 9:  /* Quit */
             return 0;  /* Signal quit */
     }
     return 1;  /* Continue by default */
@@ -922,6 +972,8 @@ int main(void) {
         /* Draw game (no mouse cursor interference) */
         if (chess_gui.show_help) {
             draw_help_screen();
+        } else if (chess_gui.show_about) {
+            draw_about_screen();
         } else {
             draw_board();
             draw_pieces();
@@ -946,6 +998,12 @@ int main(void) {
             /* If showing help, any key returns to game */
             if (chess_gui.show_help) {
                 chess_gui.show_help = false;
+                continue;
+            }
+            
+            /* If showing about, any key returns to game */
+            if (chess_gui.show_about) {
+                chess_gui.show_about = false;
                 continue;
             }
             
@@ -994,6 +1052,13 @@ int main(void) {
             /* If showing help, click returns to game */
             if (chess_gui.show_help) {
                 chess_gui.show_help = false;
+                prev_mouse_b = mouse_b;
+                continue;
+            }
+            
+            /* If showing about, click returns to game */
+            if (chess_gui.show_about) {
+                chess_gui.show_about = false;
                 prev_mouse_b = mouse_b;
                 continue;
             }
