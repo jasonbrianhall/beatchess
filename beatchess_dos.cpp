@@ -1,8 +1,3 @@
-/*
- * beatchess_dos_enhanced.cpp - BeatChess DOS/Allegro 4 with Menu System
- * Enhanced version with File menu and side buttons
- */
-
 #include <allegro.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,6 +68,14 @@ typedef struct {
     int ai_search_depth;
     int ai_total_moves;
     int ai_evaluated_moves;
+    
+    /* Timer state */
+    int white_time_seconds;
+    int white_time_frames;
+    int black_time_seconds;
+    int black_time_frames;
+    bool timer_started;
+    int ai_thinking_start_time;  /* Track when AI started thinking */
     
 } ChessGUI;
 
@@ -152,10 +155,26 @@ static void cleanup_chess_game() {
         free(chess_gui.history);
         chess_gui.history = NULL;
     }
+    chess_gui.history_size = 0;
+    chess_gui.history_capacity = 0;
 }
 
 static void init_chess_game() {
+    /* Save history pointer before clearing */
+    ChessGameState *saved_history = chess_gui.history;
+    int saved_capacity = chess_gui.history_capacity;
+    
+    /* Clear the entire structure to reset all state */
+    memset(&chess_gui, 0, sizeof(ChessGUI));
+    
+    /* Restore history pointer if it existed */
+    chess_gui.history = saved_history;
+    chess_gui.history_capacity = saved_capacity;
+    
+    /* Initialize board */
     chess_init_board(&chess_gui.game);
+    
+    /* Set defaults */
     chess_gui.selected_row = -1;
     chess_gui.selected_col = -1;
     chess_gui.piece_selected = false;
@@ -169,19 +188,24 @@ static void init_chess_game() {
     chess_gui.ai_total_moves = 0;
     chess_gui.ai_evaluated_moves = 0;
     
-    /* Free old history if exists */
-    if (chess_gui.history) {
-        free(chess_gui.history);
-        chess_gui.history = NULL;
+    /* Reset timers */
+    chess_gui.white_time_seconds = 0;
+    chess_gui.white_time_frames = 0;
+    chess_gui.black_time_seconds = 0;
+    chess_gui.black_time_frames = 0;
+    chess_gui.timer_started = false;
+    
+    /* Initialize history if it doesn't exist, otherwise just reset it */
+    if (!chess_gui.history) {
+        chess_gui.history_capacity = 200;
+        chess_gui.history = (ChessGameState *)malloc(sizeof(ChessGameState) * chess_gui.history_capacity);
+        if (!chess_gui.history) {
+            printf("ERROR: Failed to allocate history buffer\n");
+            exit(1);
+        }
     }
     
-    /* Initialize history */
-    chess_gui.history_capacity = 200;
-    chess_gui.history = (ChessGameState *)malloc(sizeof(ChessGameState) * chess_gui.history_capacity);
-    if (!chess_gui.history) {
-        printf("ERROR: Failed to allocate history buffer\n");
-        exit(1);
-    }
+    /* Just reset the history size instead of reallocating */
     chess_gui.history_size = 0;
     
     /* Save initial position */
@@ -191,8 +215,18 @@ static void init_chess_game() {
 }
 
 static void save_position_to_history() {
+    /* Safety check */
+    if (!chess_gui.history || chess_gui.history_size >= chess_gui.history_capacity) {
+        return;  /* Can't save if no buffer or buffer is full */
+    }
+    
     if (chess_gui.history_size < chess_gui.history_capacity) {
         chess_gui.history[chess_gui.history_size++] = chess_gui.game;
+        
+        /* Start timer after white's first move (move 2 in history = after first move) */
+        if (chess_gui.history_size == 2) {
+            chess_gui.timer_started = true;
+        }
     }
 }
 
@@ -201,10 +235,18 @@ static void undo_move() {
      * so the player gets their turn back */
     int moves_to_undo = chess_gui.ai_vs_ai ? 1 : 2;
     
+    /* Safety check - make sure we have history */
+    if (!chess_gui.history || chess_gui.history_size <= 1) {
+        return;  /* Can't undo if no history */
+    }
+    
     for (int i = 0; i < moves_to_undo; i++) {
         if (chess_gui.history_size > 1) {
             chess_gui.history_size--;
-            chess_gui.game = chess_gui.history[chess_gui.history_size - 1];
+            /* Bounds check before accessing array */
+            if (chess_gui.history_size > 0 && chess_gui.history_size <= chess_gui.history_capacity) {
+                chess_gui.game = chess_gui.history[chess_gui.history_size - 1];
+            }
         } else {
             break;  /* Can't undo past the start */
         }
@@ -467,15 +509,31 @@ static void draw_side_panel() {
         textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 65, COLOR_GREEN, -1);
     }
     
+    /* Display timers */
+    int timer_y = info_y + 85;
+    textout_ex(screen, font, "Time Elapsed:", BUTTON_PANEL_X, timer_y, COLOR_YELLOW, -1);
+    
+    /* White time */
+    int white_mins = chess_gui.white_time_seconds / 60;
+    int white_secs = chess_gui.white_time_seconds % 60;
+    sprintf(buf, "White: %d:%02d", white_mins, white_secs);
+    textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 15, COLOR_WHITE, -1);
+    
+    /* Black time */
+    int black_mins = chess_gui.black_time_seconds / 60;
+    int black_secs = chess_gui.black_time_seconds % 60;
+    sprintf(buf, "Black: %d:%02d", black_mins, black_secs);
+    textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 30, COLOR_WHITE, -1);
+    
     /* AI thinking indicator */
     if (chess_gui.ai_thinking) {
         sprintf(buf, "AI thinking...");
-        textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 85, COLOR_MAGENTA, -1);
+        textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 50, COLOR_MAGENTA, -1);
         sprintf(buf, "Depth: %d", chess_gui.ai_search_depth);
-        textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 100, COLOR_MAGENTA, -1);
+        textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 65, COLOR_MAGENTA, -1);
         if (chess_gui.ai_total_moves > 0) {
             sprintf(buf, "Move: %d/%d", chess_gui.ai_evaluated_moves, chess_gui.ai_total_moves);
-            textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 115, COLOR_MAGENTA, -1);
+            textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 80, COLOR_MAGENTA, -1);
         }
     }
 }
@@ -782,10 +840,36 @@ int main(void) {
                 chess_gui.ai_thinking = true;
                 chess_gui.ai_move_counter = 0;
                 
+                /* Record retrace count before AI starts (for accurate timing even when blocking) */
+                int start_retrace = retrace_count;
+                
                 /* In DOS, AI computation will block, but this is necessary for strong play.
                  * The AI evaluates thousands of positions via minimax search.
                  * On modern CPUs via DOSBox, this typically takes 1-2 seconds. */
                 ChessMove ai_move = compute_ai_move();
+                
+                /* Calculate elapsed time during AI thinking using retrace counter */
+                if (chess_gui.timer_started) {
+                    int elapsed_retraces = retrace_count - start_retrace;
+                    /* Assuming ~70 retraces per second (typical VGA), convert to our frame units */
+                    /* We use 100 frames = 1 second, so scale: elapsed_retraces * (100/70) */
+                    int elapsed_frames = (elapsed_retraces * 10) / 7;
+                    
+                    /* Add elapsed time to the AI's color */
+                    if (chess_gui.game.turn == WHITE) {
+                        chess_gui.white_time_frames += elapsed_frames;
+                        while (chess_gui.white_time_frames >= 100) {
+                            chess_gui.white_time_frames -= 100;
+                            chess_gui.white_time_seconds++;
+                        }
+                    } else {
+                        chess_gui.black_time_frames += elapsed_frames;
+                        while (chess_gui.black_time_frames >= 100) {
+                            chess_gui.black_time_frames -= 100;
+                            chess_gui.black_time_seconds++;
+                        }
+                    }
+                }
                 
                 /* Validate and make move */
                 if (chess_is_valid_move(&chess_gui.game, 
@@ -809,6 +893,24 @@ int main(void) {
         /* Update mouse position for menu highlighting */
         poll_mouse();
         update_menu_selection(mouse_y);
+        
+        /* Update timers - only after first move (when timer_started is true) */
+        if (chess_gui.timer_started) {
+            /* Increment frame counter for current player */
+            if (chess_gui.game.turn == WHITE) {
+                chess_gui.white_time_frames++;
+                if (chess_gui.white_time_frames >= 100) {  /* 100 frames * 10ms = 1 second */
+                    chess_gui.white_time_frames = 0;
+                    chess_gui.white_time_seconds++;
+                }
+            } else {
+                chess_gui.black_time_frames++;
+                if (chess_gui.black_time_frames >= 100) {
+                    chess_gui.black_time_frames = 0;
+                    chess_gui.black_time_seconds++;
+                }
+            }
+        }
         
         /* Draw to backbuffer (mouse cursor is not drawn to backbuffer) */
         BITMAP *prev_target = screen;
