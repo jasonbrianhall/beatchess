@@ -20,8 +20,8 @@ def bmp_to_bytes(bmp_path, target_size=46):
     
     # Convert to RGB if needed
     if img.mode == 'RGBA':
-        # Create white background
-        background = Image.new('RGB', img.size, (255, 255, 255))
+        # Create BRIGHT GREEN background (0, 255, 0) - will be our transparency key
+        background = Image.new('RGB', img.size, (0, 255, 0))
         background.paste(img, mask=img.split()[3])  # Use alpha as mask
         img = background
     elif img.mode != 'RGB':

@@ -10,6 +10,8 @@
 #include <ctype.h>
 #include <limits.h>
 #include "beatchess.h"
+#include "chess_pieces.h"
+#include "chess_pieces_loader.h"
 
 /* ============================================================================
  * Color definitions for Allegro 4
@@ -169,160 +171,6 @@ static void draw_board() {
     }
 }
 
-/* ============================================================================
- * Geometric Piece Drawing Functions
- * ============================================================================
- */
-
-static void draw_filled_circle(int cx, int cy, int radius, int color) {
-    /* Midpoint circle algorithm */
-    int x = 0;
-    int y = radius;
-    int d = 3 - 2 * radius;
-    
-    while (x <= y) {
-        /* Draw 8 symmetric points */
-        line(screen, cx - x, cy - y, cx + x, cy - y, color);
-        line(screen, cx - y, cy - x, cx + y, cy - x, color);
-        line(screen, cx - x, cy + y, cx + x, cy + y, color);
-        line(screen, cx - y, cy + x, cx + y, cy + x, color);
-        
-        if (d < 0) {
-            d = d + 4 * x + 6;
-        } else {
-            d = d + 4 * (x - y) + 10;
-            y--;
-        }
-        x++;
-    }
-}
-
-static void draw_piece_pawn(int cx, int cy, int size, int color) {
-    /* Circle on small rectangle */
-    int s = size / 5;
-    
-    /* Head (circle) */
-    draw_filled_circle(cx, cy - s, s / 2, color);
-    
-    /* Body (rectangle) */
-    rectfill(screen, cx - s/2, cy, cx + s/2, cy + s, color);
-}
-
-static void draw_piece_knight(int cx, int cy, int size, int color) {
-    /* Blocky horse head */
-    int s = size / 5;
-    
-    /* Neck */
-    rectfill(screen, cx - s/3, cy, cx + s/3, cy + 2*s, color);
-    
-    /* Head */
-    rectfill(screen, cx - s/4, cy - 2*s, cx + 3*s/4, cy - s, color);
-    
-    /* Snout */
-    rectfill(screen, cx + s/2, cy - s, cx + 3*s/2, cy - s/2, color);
-}
-
-static void draw_piece_bishop(int cx, int cy, int size, int color) {
-    /* Triangle with circle on top */
-    int s = size / 5;
-    
-    /* Base (filled triangle using lines) */
-    int base_left = cx - s;
-    int base_right = cx + s;
-    int base_bottom = cy + 2*s;
-    
-    for (int y = cy - 2*s; y <= base_bottom; y++) {
-        int progress = (y - (cy - 2*s));
-        int height = base_bottom - (cy - 2*s);
-        int left = cx - (s * progress) / height;
-        int right = cx + (s * progress) / height;
-        line(screen, left, y, right, y, color);
-    }
-    
-    /* Top circle */
-    draw_filled_circle(cx, cy - 2*s, s/2, color);
-}
-
-static void draw_piece_rook(int cx, int cy, int size, int color) {
-    /* Castle tower with crenellations */
-    int s = size / 5;
-    
-    /* Main body */
-    rectfill(screen, cx - 3*s/2, cy - s/2, cx + 3*s/2, cy + 2*s, color);
-    
-    /* Crenellations (three tower tops) */
-    rectfill(screen, cx - 3*s/2, cy - 5*s/2, cx - s/2, cy - s, color);
-    rectfill(screen, cx - s/4, cy - 5*s/2, cx + s/4, cy - s, color);
-    rectfill(screen, cx + s/2, cy - 5*s/2, cx + 3*s/2, cy - s, color);
-}
-
-static void draw_piece_queen(int cx, int cy, int size, int color) {
-    /* Crown with multiple points and center ball */
-    int s = size / 5;
-    
-    /* Crown body (trapezoid) */
-    int crown_top = cy - 3*s;
-    int crown_base = cy + s;
-    
-    for (int y = crown_top; y <= crown_base; y++) {
-        int progress = (y - crown_top);
-        int total = crown_base - crown_top;
-        int width = s + (2*s * progress) / total;
-        line(screen, cx - width, y, cx + width, y, color);
-    }
-    
-    /* Center peak */
-    line(screen, cx - s/2, crown_top, cx, crown_top - s, color);
-    line(screen, cx + s/2, crown_top, cx, crown_top - s, color);
-    
-    /* Center ball */
-    draw_filled_circle(cx, crown_top - s, s/2, color);
-}
-
-static void draw_piece_king(int cx, int cy, int size, int color) {
-    /* Crown with cross on top */
-    int s = size / 5;
-    
-    /* Main body */
-    rectfill(screen, cx - 3*s/2, cy - s/2, cx + 3*s/2, cy + 2*s, color);
-    
-    /* Vertical cross bar */
-    rectfill(screen, cx - s/4, cy - 5*s/2, cx + s/4, cy - s/2, color);
-    
-    /* Horizontal cross bar */
-    rectfill(screen, cx - 3*s/4, cy - 7*s/4, cx + 3*s/4, cy - 5*s/4, color);
-}
-
-static void draw_piece_outline(int cx, int cy, int size, PieceType type, int color) {
-    /* Draw simple outline based on piece type */
-    int s = size / 5;
-    
-    switch (type) {
-        case PAWN:
-            circle(screen, cx, cy - s, s/2, color);
-            rect(screen, cx - s/2, cy, cx + s/2, cy + s, color);
-            break;
-        case KNIGHT:
-            rect(screen, cx - s/3, cy, cx + s/3, cy + 2*s, color);
-            rect(screen, cx - s/4, cy - 2*s, cx + 3*s/4, cy - s, color);
-            break;
-        case BISHOP:
-            circle(screen, cx, cy - 2*s, s/2, color);
-            break;
-        case ROOK:
-            rect(screen, cx - 3*s/2, cy - s/2, cx + 3*s/2, cy + 2*s, color);
-            break;
-        case QUEEN:
-            circle(screen, cx, cy - 3*s - s/2, s/2, color);
-            break;
-        case KING:
-            rect(screen, cx - 3*s/2, cy - s/2, cx + 3*s/2, cy + 2*s, color);
-            break;
-        default:
-            break;
-    }
-}
-
 static void draw_piece_at_square(int x, int y, ChessPiece piece) {
     if (piece.type == EMPTY) return;
     
@@ -332,36 +180,12 @@ static void draw_piece_at_square(int x, int y, ChessPiece piece) {
     
     int screen_x = BOARD_START_X + x * SQUARE_SIZE + SQUARE_SIZE / 2;
     int screen_y = BOARD_START_Y + y * SQUARE_SIZE + SQUARE_SIZE / 2;
-    int piece_size = SQUARE_SIZE - 10;
+    int piece_size = SQUARE_SIZE - 4;  // 46 pixels for 50px squares
     
-    int piece_color = (piece.color == WHITE) ? COLOR_WHITE : COLOR_BLACK;
-    int outline_color = (piece.color == WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    
-    switch (piece.type) {
-        case PAWN:
-            draw_piece_pawn(screen_x, screen_y, piece_size, piece_color);
-            break;
-        case KNIGHT:
-            draw_piece_knight(screen_x, screen_y, piece_size, piece_color);
-            break;
-        case BISHOP:
-            draw_piece_bishop(screen_x, screen_y, piece_size, piece_color);
-            break;
-        case ROOK:
-            draw_piece_rook(screen_x, screen_y, piece_size, piece_color);
-            break;
-        case QUEEN:
-            draw_piece_queen(screen_x, screen_y, piece_size, piece_color);
-            break;
-        case KING:
-            draw_piece_king(screen_x, screen_y, piece_size, piece_color);
-            break;
-        default:
-            break;
+    BITMAP *sprite = get_piece_sprite(piece.type, piece.color);
+    if (sprite) {
+        draw_piece_sprite(sprite, screen_x, screen_y, piece_size);
     }
-    
-    /* Draw outline */
-    draw_piece_outline(screen_x, screen_y, piece_size, piece.type, outline_color);
 }
 
 static void draw_pieces() {
@@ -551,6 +375,16 @@ int main() {
         return 1;
     }
     
+    /* Load chess piece sprites from embedded data */
+    printf("Loading chess piece sprites...\n");
+    if (load_chess_pieces() != 0) {
+        printf("Error loading chess piece sprites!\n");
+        destroy_bitmap(backbuffer);
+        allegro_exit();
+        return 1;
+    }
+    printf("Chess pieces loaded successfully!\n");
+    
     /* Initialize game */
     init_chess_game();
     chess_gui.ai_vs_ai = false;
@@ -731,6 +565,7 @@ int main() {
     }
     
     /* Cleanup */
+    destroy_chess_pieces();  /* Free sprite bitmaps */
     destroy_bitmap(backbuffer);
     cleanup_chess_game();
     allegro_exit();
