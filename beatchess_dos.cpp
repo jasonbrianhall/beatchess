@@ -354,7 +354,7 @@ static void show_splash_screen(BITMAP *backbuffer) {
         blit(splash, backbuffer, 0, 0, x, y, splash->w, splash->h);
         
         /* Display "Press any key..." message */
-        textout_centre_ex(backbuffer, font, "Press any key to continue...", 
+        textout_centre_ex(backbuffer, font, "Press any key or click to continue...", 
                          320, 450, COLOR_WHITE, -1);
         
         /* Show the splash screen */
@@ -362,16 +362,27 @@ static void show_splash_screen(BITMAP *backbuffer) {
         blit(backbuffer, screen, 0, 0, 0, 0, 640, 480);
         unscare_mouse();
         
-        /* Clear any pending keypresses first */
+        /* Clear any pending keypresses and mouse clicks first */
         clear_keybuf();
         
-        /* Wait for keypress or timeout (10 seconds) */
+        /* Wait for keypress, mouse click, or timeout (10 seconds) */
         int timeout = 0;
+        int prev_mouse_b = 0;
         while (timeout < 1000) {  /* 1000 frames * 10ms = 10 seconds */
+            poll_mouse();
+            
+            /* Check for keypress */
             if (keypressed()) {
                 readkey();  /* Consume the key */
                 break;
             }
+            
+            /* Check for mouse click */
+            if ((mouse_b & 1) && !(prev_mouse_b & 1)) {
+                break;  /* Left click detected */
+            }
+            prev_mouse_b = mouse_b;
+            
             rest(10);
             timeout++;
         }
@@ -384,7 +395,7 @@ static void show_splash_screen(BITMAP *backbuffer) {
     }
 }
 
-/* AI move computation - full minimax search with negamax */
+/* AI move computation - standard minimax (no negamax) */
 static ChessMove compute_ai_move() {
     ChessMove moves[256];
     ChessMove best_move = {-1, -1, -1, -1, 0};
@@ -394,13 +405,14 @@ static ChessMove compute_ai_move() {
         return best_move;
     }
     
-    int best_score = INT_MIN;
     chess_gui.ai_search_depth = 3;  /* Search depth */
     ai_eval_counter = 0;
     
-    /* Using negamax: we always maximize, and negate opponent's score
-     * The maximizing flag should be TRUE for White, FALSE for Black */
-    bool current_player_is_white = (chess_gui.game.turn == WHITE);
+    /* Determine if current player is white or black
+     * White maximizes (wants positive scores)
+     * Black minimizes (wants negative scores) */
+    bool we_are_white = (chess_gui.game.turn == WHITE);
+    int best_score = we_are_white ? INT_MIN : INT_MAX;
     
     for (int i = 0; i < num_moves; i++) {
         ChessGameState temp = chess_gui.game;
@@ -411,15 +423,25 @@ static ChessMove compute_ai_move() {
             continue;
         }
         
-        /* The opponent's perspective is opposite of ours.
-         * If we're white (maximizing), opponent is black (minimizing) and vice versa.
-         * After the move, temp.turn has switched to opponent. */
+        /* Call minimax with opposite goal for opponent
+         * If we're white (maximizing), opponent will be black (minimizing)
+         * If we're black (minimizing), opponent will be white (maximizing) */
         bool opponent_is_white = (temp.turn == WHITE);
-        int score = -chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
+        int score = chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
         
-        if (score > best_score) {
-            best_score = score;
-            best_move = moves[i];
+        /* Update best move based on whether we're maximizing or minimizing */
+        if (we_are_white) {
+            /* White maximizes */
+            if (score > best_score) {
+                best_score = score;
+                best_move = moves[i];
+            }
+        } else {
+            /* Black minimizes */
+            if (score < best_score) {
+                best_score = score;
+                best_move = moves[i];
+            }
         }
         
         /* Update progress */
@@ -439,7 +461,7 @@ static void draw_menu_bar() {
     /* Menu bar background */
     rectfill(screen, 0, 0, 640, MENU_BAR_HEIGHT, COLOR_BLUE);
     
-    /* File menu */
+    /* Game menu */
     textout_ex(screen, font, "Game", 5, 5, COLOR_WHITE, -1);
     
     /* Title */
@@ -748,6 +770,12 @@ static int handle_menu_click(int mx, int my) {
             chess_gui.menu_selected = -1;
             return 1;  /* Continue */
         }
+        /* Clicked elsewhere on menu bar - close menu if open */
+        if (chess_gui.show_menu) {
+            chess_gui.show_menu = false;
+            chess_gui.menu_selected = -1;
+        }
+        return 1;  /* Continue */
     }
     
     /* Check if clicking menu items */
@@ -760,14 +788,20 @@ static int handle_menu_click(int mx, int my) {
         if (mx >= menu_x && mx < menu_x + menu_w &&
             my >= menu_y && my < menu_y + NUM_MENU_ITEMS * item_h) {
             int item = (my - menu_y) / item_h;
-            if (item >= 0 && item < NUM_MENU_ITEMS && strlen(menu_items[item]) > 0) {
-                int result = execute_menu_action(item);
-                chess_gui.show_menu = false;
-                return result;  /* Return the result (0=quit, 1=continue) */
+            /* Bounds check */
+            if (item >= 0 && item < NUM_MENU_ITEMS) {
+                /* Check if it's not a separator */
+                if (strlen(menu_items[item]) > 0) {
+                    int result = execute_menu_action(item);
+                    chess_gui.show_menu = false;
+                    chess_gui.menu_selected = -1;
+                    return result;  /* Return the result (0=quit, 1=continue) */
+                }
             }
         } else {
             /* Clicked outside menu - close it */
             chess_gui.show_menu = false;
+            chess_gui.menu_selected = -1;
             return 1;  /* Continue */
         }
     }
@@ -798,19 +832,35 @@ static bool handle_button_click(int mx, int my) {
 }
 
 static void update_menu_selection(int my) {
+    /* Safety check input */
+    if (my < 0 || my >= 480) {
+        chess_gui.menu_selected = -1;
+        return;
+    }
+    
     if (chess_gui.show_menu) {
         int menu_y = MENU_BAR_HEIGHT;
         int item_h = 20;
+        int max_menu_y = menu_y + NUM_MENU_ITEMS * item_h;
         
-        if (my >= menu_y && my < menu_y + NUM_MENU_ITEMS * item_h) {
-            chess_gui.menu_selected = (my - menu_y) / item_h;
-            if (chess_gui.menu_selected >= NUM_MENU_ITEMS || 
-                strlen(menu_items[chess_gui.menu_selected]) == 0) {
+        /* Bounds check */
+        if (my >= menu_y && my < max_menu_y) {
+            int item = (my - menu_y) / item_h;
+            /* Double bounds check and skip separators */
+            if (item >= 0 && item < NUM_MENU_ITEMS) {
+                if (strlen(menu_items[item]) > 0) {
+                    chess_gui.menu_selected = item;
+                } else {
+                    chess_gui.menu_selected = -1;
+                }
+            } else {
                 chess_gui.menu_selected = -1;
             }
         } else {
             chess_gui.menu_selected = -1;
         }
+    } else {
+        chess_gui.menu_selected = -1;
     }
 }
 
@@ -961,7 +1011,13 @@ int main(void) {
         
         /* Update mouse position for menu highlighting */
         poll_mouse();
-        update_menu_selection(mouse_y);
+        
+        /* Bounds check mouse position before using it */
+        int safe_mouse_y = mouse_y;
+        if (safe_mouse_y < 0) safe_mouse_y = 0;
+        if (safe_mouse_y >= 480) safe_mouse_y = 479;
+        
+        update_menu_selection(safe_mouse_y);
         
         /* Update timers - only after first move (when timer_started is true) */
         if (chess_gui.timer_started) {
@@ -1065,8 +1121,15 @@ int main(void) {
         
         /* Handle mouse clicks */
         if ((mouse_b & 1) && !(prev_mouse_b & 1)) {  /* Left button just pressed */
+            /* CRITICAL: Bounds check mouse coordinates FIRST */
             int mx = mouse_x;
             int my = mouse_y;
+            
+            /* Validate mouse coordinates are within screen bounds */
+            if (mx < 0) mx = 0;
+            if (mx >= 640) mx = 639;
+            if (my < 0) my = 0;
+            if (my >= 480) my = 479;
             
             /* If showing help, click returns to game */
             if (chess_gui.show_help) {
@@ -1112,6 +1175,7 @@ int main(void) {
                     int col = (mx - BOARD_START_X) / SQUARE_SIZE;
                     int row = (my - BOARD_START_Y) / SQUARE_SIZE;
                     
+                    /* Extra bounds check for board coordinates */
                     if (col >= 0 && col < 8 && row >= 0 && row < 8) {
                         ChessPiece piece = chess_gui.game.board[row][col];
                         
