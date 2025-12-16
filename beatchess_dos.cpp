@@ -70,6 +70,7 @@ typedef struct {
     int ai_move_delay;
     int ai_move_counter;
     bool ai_thinking;
+    bool ai_computing;  /* NEW: true when AI is actually in compute_ai_move() */
     ChessMove ai_best_move;
     int ai_search_depth;
     int ai_total_moves;
@@ -167,6 +168,11 @@ static void cleanup_chess_game() {
 }
 
 static void init_chess_game() {
+    /* CRITICAL: Don't allow new game while AI is computing - this causes crashes! */
+    if (chess_gui.ai_computing) {
+        return;
+    }
+    
     /* Save settings that should persist across new games */
     bool saved_ai_vs_ai = chess_gui.ai_vs_ai;
     bool saved_player_is_white = chess_gui.player_is_white;
@@ -198,6 +204,7 @@ static void init_chess_game() {
     chess_gui.ai_move_counter = 0;
     chess_gui.ai_move_delay = 15;
     chess_gui.ai_thinking = false;
+    chess_gui.ai_computing = false;
     chess_gui.ai_search_depth = 0;
     chess_gui.ai_total_moves = 0;
     chess_gui.ai_evaluated_moves = 0;
@@ -247,6 +254,11 @@ static void save_position_to_history() {
 }
 
 static void undo_move() {
+    /* Don't allow undo while AI is computing */
+    if (chess_gui.ai_computing) {
+        return;
+    }
+    
     /* In Player vs AI mode, undo TWO moves (AI's move + player's move) 
      * so the player gets their turn back */
     int moves_to_undo = chess_gui.ai_vs_ai ? 1 : 2;
@@ -888,15 +900,22 @@ int main(void) {
             
             if (chess_gui.ai_move_counter >= chess_gui.ai_move_delay) {
                 chess_gui.ai_thinking = true;
+                chess_gui.ai_computing = true;  /* Flag that we're computing */
                 chess_gui.ai_move_counter = 0;
                 
                 /* Record retrace count before AI starts (for accurate timing even when blocking) */
                 int start_retrace = retrace_count;
                 
+                /* Make a COPY of the game state for AI to analyze */
+                /* This prevents race conditions with drawing/display code */
+                ChessGameState game_copy = chess_gui.game;
+                
                 /* In DOS, AI computation will block, but this is necessary for strong play.
                  * The AI evaluates thousands of positions via minimax search.
                  * On modern CPUs via DOSBox, this typically takes 1-2 seconds. */
                 ChessMove ai_move = compute_ai_move();
+                
+                chess_gui.ai_computing = false;  /* Done computing */
                 
                 /* Calculate elapsed time during AI thinking using retrace counter */
                 if (chess_gui.timer_started) {
