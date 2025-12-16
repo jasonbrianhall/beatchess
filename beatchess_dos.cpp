@@ -12,6 +12,7 @@
 #include "beatchess.h"
 #include "chess_pieces.h"
 #include "chess_pieces_loader.h"
+#include "splashscreen.h"
 
 /* ============================================================================
  * Color definitions for Allegro 4
@@ -196,18 +197,123 @@ static void save_position_to_history() {
 }
 
 static void undo_move() {
-    if (chess_gui.history_size > 1) {
-        chess_gui.history_size--;
-        chess_gui.game = chess_gui.history[chess_gui.history_size - 1];
-        chess_gui.piece_selected = false;
+    /* In Player vs AI mode, undo TWO moves (AI's move + player's move) 
+     * so the player gets their turn back */
+    int moves_to_undo = chess_gui.ai_vs_ai ? 1 : 2;
+    
+    for (int i = 0; i < moves_to_undo; i++) {
+        if (chess_gui.history_size > 1) {
+            chess_gui.history_size--;
+            chess_gui.game = chess_gui.history[chess_gui.history_size - 1];
+        } else {
+            break;  /* Can't undo past the start */
+        }
     }
+    
+    chess_gui.piece_selected = false;
 }
 
 /* Global counter for making AI computation interruptible */
 static volatile int ai_eval_counter = 0;
 #define AI_YIELD_INTERVAL 1000  /* Yield control every N evaluations */
 
-/* AI move computation - full minimax search */
+/* Display splash screen and wait for keypress or timeout */
+static void show_splash_screen(BITMAP *backbuffer) {
+    /* Load the splash screen - need to handle 8-bit indexed BMPs differently */
+    const unsigned char *data = splashscreen_bmp;
+    unsigned int len = splashscreen_bmp_len;
+    BITMAP *splash = NULL;
+    
+    /* Verify BMP signature */
+    if (len >= 54 && data[0] == 'B' && data[1] == 'M') {
+        int data_offset = data[10] | (data[11] << 8) | (data[12] << 16) | (data[13] << 24);
+        int width = data[18] | (data[19] << 8) | (data[20] << 16) | (data[21] << 24);
+        int height = data[22] | (data[23] << 8) | (data[24] << 16) | (data[25] << 24);
+        int bpp = data[28] | (data[29] << 8);
+        
+        if (height < 0) height = -height;
+        
+        if (width > 0 && height > 0 && width <= 2048 && height <= 2048) {
+            splash = create_bitmap(width, height);
+            
+            if (splash) {
+                if (bpp == 8) {
+                    /* 8-bit indexed color BMP */
+                    const unsigned char *palette = data + 54;
+                    const unsigned char *pixel_data = data + data_offset;
+                    int bytes_per_row = ((width + 3) / 4) * 4;
+                    
+                    for (int row = 0; row < height; row++) {
+                        const unsigned char *row_data = pixel_data + (height - 1 - row) * bytes_per_row;
+                        for (int col = 0; col < width; col++) {
+                            int palette_index = row_data[col];
+                            int b = palette[palette_index * 4 + 0];
+                            int g = palette[palette_index * 4 + 1];
+                            int r = palette[palette_index * 4 + 2];
+                            putpixel(splash, col, row, makecol(r, g, b));
+                        }
+                    }
+                } else if (bpp == 24) {
+                    /* 24-bit RGB BMP */
+                    const unsigned char *pixel_data = data + data_offset;
+                    int bytes_per_row = ((width * 3 + 3) / 4) * 4;
+                    
+                    for (int row = 0; row < height; row++) {
+                        const unsigned char *row_data = pixel_data + (height - 1 - row) * bytes_per_row;
+                        for (int col = 0; col < width; col++) {
+                            int b = row_data[col * 3 + 0];
+                            int g = row_data[col * 3 + 1];
+                            int r = row_data[col * 3 + 2];
+                            putpixel(splash, col, row, makecol(r, g, b));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if (splash) {
+        /* Clear screen to black */
+        clear_to_color(backbuffer, COLOR_BLACK);
+        
+        /* Center the splash screen */
+        int x = (640 - splash->w) / 2;
+        int y = (480 - splash->h) / 2;
+        
+        /* Draw splash to backbuffer */
+        blit(splash, backbuffer, 0, 0, x, y, splash->w, splash->h);
+        
+        /* Display "Press any key..." message */
+        textout_centre_ex(backbuffer, font, "Press any key to continue...", 
+                         320, 450, COLOR_WHITE, -1);
+        
+        /* Show the splash screen */
+        scare_mouse();
+        blit(backbuffer, screen, 0, 0, 0, 0, 640, 480);
+        unscare_mouse();
+        
+        /* Wait for keypress or timeout (3 seconds) */
+        int timeout = 0;
+        clear_keybuf();
+        while (timeout < 300 && !keypressed()) {  /* 300 frames * 10ms = 3 seconds */
+            rest(10);
+            timeout++;
+        }
+        
+        /* Clear the keypress if any */
+        if (keypressed()) {
+            readkey();
+        }
+        
+        /* Cleanup */
+        destroy_bitmap(splash);
+    } else {
+        printf("Warning: Could not load splash screen\n");
+        rest(500);  /* Brief pause so user sees the message */
+    }
+}
+
+/* AI move computation - full minimax search with negamax */
 static ChessMove compute_ai_move() {
     ChessMove moves[256];
     ChessMove best_move = {-1, -1, -1, -1, 0};
@@ -221,6 +327,10 @@ static ChessMove compute_ai_move() {
     chess_gui.ai_search_depth = 3;  /* Search depth */
     ai_eval_counter = 0;
     
+    /* Using negamax: we always maximize, and negate opponent's score
+     * The maximizing flag should be TRUE for White, FALSE for Black */
+    bool current_player_is_white = (chess_gui.game.turn == WHITE);
+    
     for (int i = 0; i < num_moves; i++) {
         ChessGameState temp = chess_gui.game;
         chess_make_move(&temp, moves[i]);
@@ -230,7 +340,11 @@ static ChessMove compute_ai_move() {
             continue;
         }
         
-        int score = -chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, false);
+        /* The opponent's perspective is opposite of ours.
+         * If we're white (maximizing), opponent is black (minimizing) and vice versa.
+         * After the move, temp.turn has switched to opponent. */
+        bool opponent_is_white = (temp.turn == WHITE);
+        int score = -chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
         
         if (score > best_score) {
             best_score = score;
@@ -633,6 +747,10 @@ int main(void) {
         return 1;
     }
     printf("Chess pieces loaded successfully!\n");
+    
+    /* Display splash screen */
+    printf("Displaying splash screen...\n");
+    show_splash_screen(backbuffer);
     
     /* Initialize game */
     memset(&chess_gui, 0, sizeof(ChessGUI));  /* Zero out the structure */
