@@ -6,6 +6,9 @@
 #include <limits.h>
 #include <math.h>
 #include <unistd.h>
+#ifdef MSDOS
+#include "math_compat.h"
+#endif
 
 // ============================================================================
 // CORE CHESS ENGINE

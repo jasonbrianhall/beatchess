@@ -2,8 +2,10 @@
 #define VISUALIZATION_H
 
 #include <stdbool.h>
+#ifndef MSDOS
 #include <gtk/gtk.h>
 #include <cairo.h>
+#endif
 #include <math.h>
 #include <string.h>
 #include "beatchess.h"

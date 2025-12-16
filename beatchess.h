@@ -1,8 +1,20 @@
 #ifndef BEATCHESS_H
 #define BEATCHESS_H
 
-#include <pthread.h>
 #include <stdbool.h>
+
+/* Platform detection and conditional includes */
+#if defined(MSDOS)
+    /* DOS/DJGPP environment - no pthread support */
+    #define BEATCHESS_DOS 1
+    #define BEATCHESS_HAS_PTHREAD 0
+    #include "pthread_stub.h"
+#else
+    /* Unix/Linux/Windows with modern compiler - pthread support */
+    #define BEATCHESS_DOS 0
+    #define BEATCHESS_HAS_PTHREAD 1
+    #include <pthread.h>
+#endif
 
 #define BOARD_SIZE 8
 #define MAX_CHESS_DEPTH 4
@@ -23,7 +35,6 @@ typedef struct {
     int score;
 } ChessMove;
 
-
 typedef struct {
     ChessPiece board[BOARD_SIZE][BOARD_SIZE];
     ChessColor turn;
@@ -34,6 +45,7 @@ typedef struct {
     int en_passant_row; // The row where en passant capture would land
 } ChessGameState;
 
+/* Platform-specific ChessThinkingState */
 typedef struct {
     ChessGameState game;
     ChessMove best_move;
@@ -58,49 +70,37 @@ typedef struct {
     double time_elapsed;  // Time spent on this move
 } MoveHistory;
 
-
-
 typedef struct {
     // Game state
     ChessGameState game;
     ChessThinkingState thinking_state;
     ChessGameStatus status;
     
-    // Animation state
+    // Animation state (GTK version uses these, DOS doesn't)
     double piece_x[BOARD_SIZE][BOARD_SIZE];
     double piece_y[BOARD_SIZE][BOARD_SIZE];
     double target_x[BOARD_SIZE][BOARD_SIZE];
     double target_y[BOARD_SIZE][BOARD_SIZE];
     
     // Last move highlight
-    int last_from_row, last_from_col;
-    int last_to_row, last_to_col;
     double last_move_glow;
-    
-    // Move being animated
-    int animating_from_row, animating_from_col;
-    int animating_to_row, animating_to_col;
-    double animation_progress;
-    bool is_animating;
-    
-    // Status display
-    char status_text[256];
     double status_flash_timer;
     double status_flash_color[3]; // RGB
     int last_eval_change;
     
-    // Beat detection
+    // Beat detection (for sound-reactive features)
     double beat_volume_history[BEAT_HISTORY_SIZE];
     int beat_history_index;
     double time_since_last_move;
     double beat_threshold;
     
-    // Visual elements
-    double board_offset_x, board_offset_y;
-    double cell_size;
-    int move_count;
+    // Animation state
+    int animating_from_row, animating_from_col;
+    int animating_to_row, animating_to_col;
+    double animation_progress;
+    bool is_animating;
     
-    // Evaluation bar
+    // Evaluation bar (GTK visualizations)
     double eval_bar_position; // -1 to 1, smoothed
     double eval_bar_target;
 
@@ -112,33 +112,44 @@ typedef struct {
     int good_move_threshold;       // Score threshold to auto-play (e.g., 200)
     bool auto_play_enabled;        // Whether to auto-play good moves
     
-    // Reset button
+    // GTK UI buttons and controls
     double reset_button_x, reset_button_y;
     double reset_button_width, reset_button_height;
     bool reset_button_hovered;
     double reset_button_glow;
-    bool reset_button_was_pressed;  // Track previous frame state for click detection
+    bool reset_button_was_pressed;
     
-    // PvsA toggle button
     double pvsa_button_x, pvsa_button_y;
     double pvsa_button_width, pvsa_button_height;
     bool pvsa_button_hovered;
     double pvsa_button_glow;
     bool pvsa_button_was_pressed;
-    bool player_vs_ai;  // true = Player vs AI, false = AI vs AI
     
-    // Player move tracking (for Player vs AI mode)
-    int selected_piece_row, selected_piece_col;  // Currently selected piece
-    bool has_selected_piece;
-    int selected_piece_was_pressed;  // Mouse state for selection
-    
-    // Undo button and move history (for Player vs AI mode)
     double undo_button_x, undo_button_y;
     double undo_button_width, undo_button_height;
     bool undo_button_hovered;
     double undo_button_glow;
     bool undo_button_was_pressed;
     
+    double flip_button_x, flip_button_y;
+    double flip_button_width, flip_button_height;
+    bool flip_button_hovered;
+    double flip_button_glow;
+    bool flip_button_was_pressed;
+    
+    // Common state for all platforms
+    int last_from_row, last_from_col;
+    int last_to_row, last_to_col;
+    
+    // Status display
+    char status_text[256];
+    
+    // Visual elements
+    double board_offset_x, board_offset_y;
+    double cell_size;
+    int move_count;
+    
+    // Move history
     MoveHistory move_history[MAX_MOVE_HISTORY];
     int move_history_count;
     
@@ -148,16 +159,23 @@ typedef struct {
     double current_move_start_time;  // When current move phase started (for display)
     double last_move_end_time;  // When the last move was completed (for accurate timing)
     
-    // Flip board button (for playing as Black)
-    double flip_button_x, flip_button_y;
-    double flip_button_width, flip_button_height;
-    bool flip_button_hovered;
-    double flip_button_glow;
-    bool flip_button_was_pressed;
+    // Player control state
+    bool player_vs_ai;  // true = Player vs AI, false = AI vs AI
     bool board_flipped;  // true = board flipped (player plays Black), false = normal (player plays White)
+    
+    int selected_piece_row, selected_piece_col;  // Currently selected piece
+    bool has_selected_piece;
+    int selected_piece_was_pressed;  // Mouse state for selection
     
 } BeatChessVisualization;
 
+/* Function declarations */
 bool chess_can_undo(BeatChessVisualization *chess);
+void chess_init_board(ChessGameState *game);
+bool chess_is_valid_move(ChessGameState *game, int fr, int fc, int tr, int tc);
+void chess_execute_move(ChessGameState *game, int fr, int fc, int tr, int tc);
+bool chess_is_in_bounds(int r, int c);
+bool chess_is_path_clear(ChessGameState *game, int fr, int fc, int tr, int tc);
+void chess_make_move(ChessGameState *game, ChessMove move);
 
 #endif // BEATCHESS_H
