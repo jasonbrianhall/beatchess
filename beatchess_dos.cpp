@@ -1,6 +1,6 @@
 /*
- * beatchess_dos.cpp - BeatChess DOS/Allegro 4 Implementation
- * Fixed version with AI support and proper memory management
+ * beatchess_dos_enhanced.cpp - BeatChess DOS/Allegro 4 with Menu System
+ * Enhanced version with File menu and side buttons
  */
 
 #include <allegro.h>
@@ -29,6 +29,18 @@
 #define COLOR_GRAY      8
 
 /* ============================================================================
+ * UI Button Structure
+ * ============================================================================
+ */
+
+typedef struct {
+    int x, y, w, h;
+    const char *label;
+    int hotkey;  /* Keyboard shortcut */
+    bool enabled;
+} Button;
+
+/* ============================================================================
  * Global game state
  * ============================================================================
  */
@@ -47,6 +59,8 @@ typedef struct {
     
     /* UI state */
     bool show_help;
+    bool show_menu;
+    int menu_selected;
     bool ai_vs_ai;
     bool player_is_white;
     
@@ -68,6 +82,51 @@ extern bool chess_is_in_check(ChessGameState *game, ChessColor color);
 extern int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing);
 
 /* ============================================================================
+ * UI Definitions
+ * ============================================================================
+ */
+
+#define BOARD_START_X 60
+#define BOARD_START_Y 80
+#define SQUARE_SIZE 50
+#define BUTTON_PANEL_X 480
+#define BUTTON_PANEL_Y 80
+#define BUTTON_WIDTH 140
+#define BUTTON_HEIGHT 30
+#define BUTTON_SPACING 8
+
+/* Menu bar */
+#define MENU_BAR_HEIGHT 20
+#define MENU_ITEM_WIDTH 80
+
+/* Side panel buttons */
+Button side_buttons[] = {
+    {BUTTON_PANEL_X, BUTTON_PANEL_Y + 0, BUTTON_WIDTH, BUTTON_HEIGHT, "New Game (N)", 'N', true},
+    {BUTTON_PANEL_X, BUTTON_PANEL_Y + 38, BUTTON_WIDTH, BUTTON_HEIGHT, "Undo (U)", 'U', true},
+    {BUTTON_PANEL_X, BUTTON_PANEL_Y + 76, BUTTON_WIDTH, BUTTON_HEIGHT, "Toggle AI (A)", 'A', true},
+    {BUTTON_PANEL_X, BUTTON_PANEL_Y + 114, BUTTON_WIDTH, BUTTON_HEIGHT, "Swap Color (B)", 'B', true},
+    {BUTTON_PANEL_X, BUTTON_PANEL_Y + 152, BUTTON_WIDTH, BUTTON_HEIGHT, "Help (?)", '?', true},
+    {BUTTON_PANEL_X, BUTTON_PANEL_Y + 190, BUTTON_WIDTH, BUTTON_HEIGHT, "Quit (Q)", 'Q', true},
+};
+
+#define NUM_BUTTONS (sizeof(side_buttons) / sizeof(side_buttons[0]))
+
+/* Menu items */
+const char *menu_items[] = {
+    "New Game     N",
+    "Undo Move    U",
+    "",  /* separator */
+    "AI vs AI     A",
+    "Swap Color   B",
+    "",  /* separator */
+    "Help         ?",
+    "",  /* separator */
+    "Quit         Q"
+};
+
+#define NUM_MENU_ITEMS (sizeof(menu_items) / sizeof(menu_items[0]))
+
+/* ============================================================================
  * Helper functions
  * ============================================================================
  */
@@ -79,6 +138,10 @@ static void draw_text(int x, int y, int color, const char *text) {
 static void draw_text_center(int x, int y, int color, const char *text) {
     int len = strlen(text) * 8;  /* Approximate width */
     textout_ex(screen, font, text, x - len/2, y, color, -1);
+}
+
+static bool point_in_rect(int px, int py, int x, int y, int w, int h) {
+    return (px >= x && px < x + w && py >= y && py < y + h);
 }
 
 static void cleanup_chess_game() {
@@ -94,6 +157,8 @@ static void init_chess_game() {
     chess_gui.selected_col = -1;
     chess_gui.piece_selected = false;
     chess_gui.show_help = false;
+    chess_gui.show_menu = false;
+    chess_gui.menu_selected = -1;
     chess_gui.ai_move_counter = 0;
     chess_gui.ai_move_delay = 15;  /* Frames to wait before AI moves */
     chess_gui.ai_thinking = false;
@@ -102,6 +167,7 @@ static void init_chess_game() {
     /* Free old history if exists */
     if (chess_gui.history) {
         free(chess_gui.history);
+        chess_gui.history = NULL;
     }
     
     /* Initialize history */
@@ -119,12 +185,171 @@ static void init_chess_game() {
     }
 }
 
+static void save_position_to_history() {
+    if (chess_gui.history_size < chess_gui.history_capacity) {
+        chess_gui.history[chess_gui.history_size++] = chess_gui.game;
+    }
+}
+
+static void undo_move() {
+    if (chess_gui.history_size > 1) {
+        chess_gui.history_size--;
+        chess_gui.game = chess_gui.history[chess_gui.history_size - 1];
+        chess_gui.piece_selected = false;
+    }
+}
+
+/* AI move computation */
+static ChessMove compute_ai_move() {
+    ChessMove moves[256];
+    ChessMove best_move = {-1, -1, -1, -1, 0};
+    int num_moves = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, moves);
+    
+    if (num_moves == 0) {
+        return best_move;
+    }
+    
+    int best_score = INT_MIN;
+    chess_gui.ai_search_depth = 3;  /* Search depth */
+    
+    for (int i = 0; i < num_moves; i++) {
+        ChessGameState temp = chess_gui.game;
+        chess_make_move(&temp, moves[i]);
+        
+        /* Skip if move leaves king in check */
+        if (chess_is_in_check(&temp, chess_gui.game.turn)) {
+            continue;
+        }
+        
+        int score = -chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, false);
+        
+        if (score > best_score) {
+            best_score = score;
+            best_move = moves[i];
+        }
+    }
+    
+    return best_move;
+}
+
+/* ============================================================================
+ * Drawing functions
+ * ============================================================================
+ */
+
+static void draw_menu_bar() {
+    /* Menu bar background */
+    rectfill(screen, 0, 0, 640, MENU_BAR_HEIGHT, COLOR_BLUE);
+    
+    /* File menu */
+    textout_ex(screen, font, "File", 5, 5, COLOR_WHITE, -1);
+    
+    /* Title */
+    textout_ex(screen, font, "BeatChess - DOS Edition", 200, 5, COLOR_YELLOW, -1);
+    
+    /* Draw dropdown menu if active */
+    if (chess_gui.show_menu) {
+        int menu_x = 0;
+        int menu_y = MENU_BAR_HEIGHT;
+        int menu_w = 200;  /* Increased width */
+        int item_h = 20;
+        int menu_h = NUM_MENU_ITEMS * item_h;
+        
+        /* Menu background with border */
+        rectfill(screen, menu_x, menu_y, menu_x + menu_w, menu_y + menu_h, COLOR_BLUE);
+        rect(screen, menu_x, menu_y, menu_x + menu_w, menu_y + menu_h, COLOR_WHITE);
+        
+        /* Menu items */
+        for (int i = 0; i < NUM_MENU_ITEMS; i++) {
+            int item_y = menu_y + i * item_h;
+            
+            /* Separator */
+            if (strlen(menu_items[i]) == 0) {
+                hline(screen, menu_x + 5, item_y + item_h/2, menu_x + menu_w - 5, COLOR_GRAY);
+                continue;
+            }
+            
+            /* Highlight selected */
+            if (i == chess_gui.menu_selected) {
+                rectfill(screen, menu_x + 2, item_y + 2, 
+                        menu_x + menu_w - 2, item_y + item_h - 2, COLOR_CYAN);
+            }
+            
+            /* Draw menu item text */
+            int text_color = (i == chess_gui.menu_selected) ? COLOR_BLACK : COLOR_WHITE;
+            textout_ex(screen, font, menu_items[i], menu_x + 10, item_y + 5, text_color, -1);
+        }
+    }
+}
+
+static void draw_button(Button *btn, bool hover) {
+    int bg_color = btn->enabled ? (hover ? COLOR_CYAN : COLOR_BLUE) : COLOR_GRAY;
+    int text_color = btn->enabled ? (hover ? COLOR_BLACK : COLOR_WHITE) : COLOR_BLACK;
+    
+    /* Button background */
+    rectfill(screen, btn->x, btn->y, btn->x + btn->w, btn->y + btn->h, bg_color);
+    
+    /* Button border */
+    rect(screen, btn->x, btn->y, btn->x + btn->w, btn->y + btn->h, COLOR_WHITE);
+    
+    /* Button text - centered */
+    int text_w = strlen(btn->label) * 8;
+    int text_x = btn->x + (btn->w - text_w) / 2;
+    int text_y = btn->y + (btn->h - 8) / 2;
+    textout_ex(screen, font, btn->label, text_x, text_y, text_color, -1);
+}
+
+static void draw_side_panel() {
+    /* Panel background - don't draw over the board */
+    rectfill(screen, BUTTON_PANEL_X - 10, MENU_BAR_HEIGHT, 
+             640, 480, COLOR_BLACK);
+    
+    /* Panel title */
+    textout_ex(screen, font, "Controls", BUTTON_PANEL_X + 35, MENU_BAR_HEIGHT + 5, 
+               COLOR_YELLOW, -1);
+    
+    /* Draw buttons */
+    for (int i = 0; i < NUM_BUTTONS; i++) {
+        bool hover = point_in_rect(mouse_x, mouse_y, 
+                                   side_buttons[i].x, side_buttons[i].y,
+                                   side_buttons[i].w, side_buttons[i].h);
+        draw_button(&side_buttons[i], hover);
+    }
+    
+    /* Game info panel */
+    int info_y = BUTTON_PANEL_Y + 250;
+    textout_ex(screen, font, "Game Info:", BUTTON_PANEL_X, info_y, COLOR_YELLOW, -1);
+    
+    char buf[64];
+    sprintf(buf, "Move: %d", chess_gui.history_size);
+    textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 20, COLOR_WHITE, -1);
+    
+    const char *turn_str = (chess_gui.game.turn == WHITE) ? "White" : "Black";
+    sprintf(buf, "Turn: %s", turn_str);
+    textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 35, COLOR_WHITE, -1);
+    
+    const char *mode_str = chess_gui.ai_vs_ai ? "AI vs AI" : 
+                          (chess_gui.player_is_white ? "Player vs AI" : "AI vs Player");
+    sprintf(buf, "Mode: %s", mode_str);
+    textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 50, COLOR_WHITE, -1);
+    
+    if (!chess_gui.ai_vs_ai) {
+        const char *player_color = chess_gui.player_is_white ? "White" : "Black";
+        sprintf(buf, "You: %s", player_color);
+        textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 65, COLOR_GREEN, -1);
+    }
+    
+    /* AI thinking indicator */
+    if (chess_gui.ai_thinking) {
+        sprintf(buf, "AI thinking...");
+        textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 85, COLOR_MAGENTA, -1);
+        sprintf(buf, "Depth: %d", chess_gui.ai_search_depth);
+        textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 100, COLOR_MAGENTA, -1);
+    }
+}
+
 static void draw_board() {
     int x, y, color;
-    
-    #define BOARD_START_X 60
-    #define BOARD_START_Y 60
-    #define SQUARE_SIZE 50
     
     /* Define custom colors for chess board (green and cream/beige) */
     #define LIGHT_SQUARE 15   /* Light beige/cream color */
@@ -160,23 +385,23 @@ static void draw_board() {
     const char *files = "ABCDEFGH";
     for (x = 0; x < 8; x++) {
         char buf[2] = {files[x], '\0'};
-        textout_ex(screen, font, buf, BOARD_START_X + 18 + x * SQUARE_SIZE, 35, COLOR_WHITE, -1);
+        textout_ex(screen, font, buf, BOARD_START_X + 18 + x * SQUARE_SIZE, BOARD_START_Y - 20, COLOR_WHITE, -1);
     }
     
     /* Draw rank labels (8-1) */
     for (y = 0; y < 8; y++) {
         char buf[2];
         sprintf(buf, "%d", 8 - y);
-        textout_ex(screen, font, buf, 35, BOARD_START_Y + 15 + y * SQUARE_SIZE, COLOR_WHITE, -1);
+        textout_ex(screen, font, buf, BOARD_START_X - 20, BOARD_START_Y + 15 + y * SQUARE_SIZE, COLOR_WHITE, -1);
     }
+    
+    /* Draw board border */
+    rect(screen, BOARD_START_X - 1, BOARD_START_Y - 1, 
+         BOARD_START_X + 8 * SQUARE_SIZE, BOARD_START_Y + 8 * SQUARE_SIZE, COLOR_WHITE);
 }
 
 static void draw_piece_at_square(int x, int y, ChessPiece piece) {
     if (piece.type == EMPTY) return;
-    
-    #define BOARD_START_X 60
-    #define BOARD_START_Y 60
-    #define SQUARE_SIZE 50
     
     int screen_x = BOARD_START_X + x * SQUARE_SIZE + SQUARE_SIZE / 2;
     int screen_y = BOARD_START_Y + y * SQUARE_SIZE + SQUARE_SIZE / 2;
@@ -197,147 +422,155 @@ static void draw_pieces() {
     }
 }
 
-static void draw_ui() {
-    char buf[256];
-    
-    /* Draw status */
-    sprintf(buf, "Move: %d", chess_gui.history_size);
-    textout_ex(screen, font, buf, 60, 480, COLOR_YELLOW, -1);
-    
-    /* Draw whose turn it is */
-    const char *turn_str = (chess_gui.game.turn == WHITE) ? "White to move" : "Black to move";
-    textout_ex(screen, font, turn_str, 200, 480, COLOR_CYAN, -1);
-    
-    /* Draw mode */
-    const char *mode_str = chess_gui.ai_vs_ai ? "AI vs AI" : 
-                          (chess_gui.player_is_white ? "Player(W) vs AI(B)" : "AI(W) vs Player(B)");
-    textout_ex(screen, font, mode_str, 380, 480, COLOR_GREEN, -1);
-    
-    /* Draw AI thinking indicator */
-    if (chess_gui.ai_thinking) {
-        sprintf(buf, "AI thinking... (depth %d)", chess_gui.ai_search_depth);
-        textout_ex(screen, font, buf, 60, 495, COLOR_MAGENTA, -1);
-    }
-    
-    textout_ex(screen, font, "U=Undo N=New A=AI/PvA B=Color ?=Help Q=Quit", 60, 510, COLOR_WHITE, -1);
-}
-
 static void draw_help_screen() {
     int y = 50;
     
     rectfill(screen, 0, 0, 640, 480, COLOR_BLACK);
     
-    textout_ex(screen, font, "=== BEATCHESS DOS HELP ===", 160, y, COLOR_YELLOW, -1);
-    y += 20;
+    draw_text_center(320, y, COLOR_YELLOW, "BeatChess - Help");
+    y += 30;
     
-    textout_ex(screen, font, "Click on a piece to select it", 80, y, COLOR_WHITE, -1);
-    y += 10;
-    textout_ex(screen, font, "Click on destination to move", 80, y, COLOR_WHITE, -1);
-    y += 10;
+    draw_text(100, y, COLOR_CYAN, "KEYBOARD SHORTCUTS:"); y += 20;
+    draw_text(100, y, COLOR_WHITE, "N - New Game"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "U - Undo Move"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "A - Toggle AI Mode (Player vs AI / AI vs AI)"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "B - Swap Player Color (White/Black)"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "? - Show This Help"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "Q or ESC - Quit Game"); y += 25;
     
-    textout_ex(screen, font, "Controls:", 80, y, COLOR_YELLOW, -1);
-    y += 20;
+    draw_text(100, y, COLOR_CYAN, "MOUSE CONTROLS:"); y += 20;
+    draw_text(100, y, COLOR_WHITE, "Click on a piece to select it"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "Click on a square to move the piece there"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "Click side buttons for quick actions"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "Click 'File' menu for game options"); y += 25;
     
-    textout_ex(screen, font, "U - Undo last move", 80, y, COLOR_WHITE, -1);
-    y += 10;
-    textout_ex(screen, font, "N - New game", 80, y, COLOR_WHITE, -1);
-    y += 10;
-    textout_ex(screen, font, "A - Toggle AI vs AI / Player vs AI", 80, y, COLOR_WHITE, -1);
-    y += 10;
-    textout_ex(screen, font, "B - Change player color (PvA mode)", 80, y, COLOR_WHITE, -1);
-    y += 10;
-    textout_ex(screen, font, "? - Show this help", 80, y, COLOR_WHITE, -1);
-    y += 10;
-    textout_ex(screen, font, "Q - Quit game", 80, y, COLOR_WHITE, -1);
-    y += 20;
+    draw_text(100, y, COLOR_CYAN, "GAME MODES:"); y += 20;
+    draw_text(100, y, COLOR_WHITE, "Player vs AI - Play against the computer"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "AI vs AI - Watch two AI players compete"); y += 25;
     
-    textout_ex(screen, font, "Press any key to continue...", 120, y, COLOR_CYAN, -1);
-    
-    readkey();  /* Wait for key press */
-}
-
-static void save_position_to_history() {
-    if (chess_gui.history_size < chess_gui.history_capacity) {
-        chess_gui.history[chess_gui.history_size++] = chess_gui.game;
-    } else {
-        printf("WARNING: History buffer full!\n");
-    }
-}
-
-static void undo_move() {
-    if (chess_gui.history_size > 1) {
-        chess_gui.history_size--;
-        chess_gui.game = chess_gui.history[chess_gui.history_size - 1];
-    }
+    draw_text_center(320, y + 20, COLOR_GREEN, "Press any key to continue...");
 }
 
 /* ============================================================================
- * AI Logic - Simplified for DOS (no threading)
+ * Menu and button handling
  * ============================================================================
  */
 
-static ChessMove compute_ai_move() {
-    ChessMove moves[256];
-    int move_count = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, moves);
-    
-    if (move_count == 0) {
-        /* No legal moves - return dummy move */
-        ChessMove dummy = {0, 0, 0, 0, 0};
-        return dummy;
-    }
-    
-    /* Simple iterative deepening up to depth 3 for DOS */
-    ChessMove best_move = moves[0];
-    
-    for (int depth = 1; depth <= 3; depth++) {
-        chess_gui.ai_search_depth = depth;
-        
-        ChessMove depth_best_moves[256];
-        int best_move_count = 0;
-        int best_score = (chess_gui.game.turn == WHITE) ? INT_MIN : INT_MAX;
-        
-        for (int i = 0; i < move_count; i++) {
-            ChessGameState temp = chess_gui.game;
-            chess_make_move(&temp, moves[i]);
-            int score = chess_minimax(&temp, depth - 1, INT_MIN, INT_MAX, 
-                                     chess_gui.game.turn == BLACK);
+static int execute_menu_action(int index) {
+    switch (index) {
+        case 0:  /* New Game */
+            init_chess_game();
+            chess_gui.ai_move_counter = 0;
+            return 1;  /* Continue */
             
-            if (chess_gui.game.turn == WHITE) {
-                if (score > best_score) {
-                    best_score = score;
-                    depth_best_moves[0] = moves[i];
-                    best_move_count = 1;
-                } else if (score == best_score && best_move_count < 256) {
-                    depth_best_moves[best_move_count++] = moves[i];
-                }
-            } else {
-                if (score < best_score) {
-                    best_score = score;
-                    depth_best_moves[0] = moves[i];
-                    best_move_count = 1;
-                } else if (score == best_score && best_move_count < 256) {
-                    depth_best_moves[best_move_count++] = moves[i];
-                }
-            }
-        }
-        
-        if (best_move_count > 0) {
-            best_move = depth_best_moves[rand() % best_move_count];
+        case 1:  /* Undo Move */
+            undo_move();
+            chess_gui.ai_move_counter = 0;
+            return 1;  /* Continue */
+            
+        case 3:  /* AI vs AI */
+            chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai;
+            chess_gui.ai_move_counter = 0;
+            return 1;  /* Continue */
+            
+        case 4:  /* Swap Color */
+            chess_gui.player_is_white = !chess_gui.player_is_white;
+            chess_gui.ai_move_counter = 0;
+            return 1;  /* Continue */
+            
+        case 6:  /* Help */
+            chess_gui.show_help = true;
+            return 1;  /* Continue */
+            
+        case 8:  /* Quit */
+            return 0;  /* Signal quit */
+    }
+    return 1;  /* Continue by default */
+}
+
+static int handle_menu_click(int mx, int my) {
+    /* Check if clicking menu bar */
+    if (my < MENU_BAR_HEIGHT) {
+        if (mx < MENU_ITEM_WIDTH) {
+            chess_gui.show_menu = !chess_gui.show_menu;
+            chess_gui.menu_selected = -1;
+            return 1;  /* Continue */
         }
     }
     
-    return best_move;
+    /* Check if clicking menu items */
+    if (chess_gui.show_menu) {
+        int menu_x = 0;
+        int menu_y = MENU_BAR_HEIGHT;
+        int menu_w = 200;  /* Match the new width */
+        int item_h = 20;
+        
+        if (mx >= menu_x && mx < menu_x + menu_w &&
+            my >= menu_y && my < menu_y + NUM_MENU_ITEMS * item_h) {
+            int item = (my - menu_y) / item_h;
+            if (item >= 0 && item < NUM_MENU_ITEMS && strlen(menu_items[item]) > 0) {
+                int result = execute_menu_action(item);
+                chess_gui.show_menu = false;
+                return result;  /* Return the result (0=quit, 1=continue) */
+            }
+        } else {
+            /* Clicked outside menu - close it */
+            chess_gui.show_menu = false;
+            return 1;  /* Continue */
+        }
+    }
+    
+    return 1;  /* Continue by default */
+}
+
+static bool handle_button_click(int mx, int my) {
+    for (int i = 0; i < NUM_BUTTONS; i++) {
+        if (side_buttons[i].enabled && 
+            point_in_rect(mx, my, side_buttons[i].x, side_buttons[i].y,
+                         side_buttons[i].w, side_buttons[i].h)) {
+            
+            /* Simulate keypress for the button's hotkey */
+            int key = side_buttons[i].hotkey;
+            switch (key) {
+                case 'N': init_chess_game(); chess_gui.ai_move_counter = 0; break;
+                case 'U': undo_move(); chess_gui.ai_move_counter = 0; break;
+                case 'A': chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai; chess_gui.ai_move_counter = 0; break;
+                case 'B': chess_gui.player_is_white = !chess_gui.player_is_white; chess_gui.ai_move_counter = 0; break;
+                case '?': chess_gui.show_help = true; break;
+                case 'Q': return false;  /* Signal to quit */
+            }
+            return true;
+        }
+    }
+    return true;
+}
+
+static void update_menu_selection(int my) {
+    if (chess_gui.show_menu) {
+        int menu_y = MENU_BAR_HEIGHT;
+        int item_h = 20;
+        
+        if (my >= menu_y && my < menu_y + NUM_MENU_ITEMS * item_h) {
+            chess_gui.menu_selected = (my - menu_y) / item_h;
+            if (chess_gui.menu_selected >= NUM_MENU_ITEMS || 
+                strlen(menu_items[chess_gui.menu_selected]) == 0) {
+                chess_gui.menu_selected = -1;
+            }
+        } else {
+            chess_gui.menu_selected = -1;
+        }
+    }
 }
 
 /* ============================================================================
- * Main game loop
+ * Main function
  * ============================================================================
  */
 
-int main() {
+int main(void) {
     /* Initialize Allegro */
     if (allegro_init() != 0) {
-        printf("Error initializing Allegro\n");
+        printf("Failed to initialize Allegro\n");
         return 1;
     }
     
@@ -345,8 +578,7 @@ int main() {
     install_mouse();
     install_timer();
     
-    /* Set graphics mode: 640x480 VGA */
-    set_color_depth(8);  /* 8-bit color (256 colors) */
+    /* Set graphics mode */
     if (set_gfx_mode(GFX_AUTODETECT, 640, 480, 0, 0) != 0) {
         printf("Error setting graphics mode\n");
         return 1;
@@ -386,6 +618,7 @@ int main() {
     printf("Chess pieces loaded successfully!\n");
     
     /* Initialize game */
+    memset(&chess_gui, 0, sizeof(ChessGUI));  /* Zero out the structure */
     init_chess_game();
     chess_gui.ai_vs_ai = false;
     chess_gui.player_is_white = true;
@@ -436,6 +669,10 @@ int main() {
             }
         }
         
+        /* Update mouse position for menu highlighting */
+        poll_mouse();
+        update_menu_selection(mouse_y);
+        
         /* Draw to backbuffer (mouse cursor is not drawn to backbuffer) */
         BITMAP *prev_target = screen;
         screen = backbuffer;
@@ -446,11 +683,11 @@ int main() {
         /* Draw game (no mouse cursor interference) */
         if (chess_gui.show_help) {
             draw_help_screen();
-            chess_gui.show_help = false;
         } else {
             draw_board();
             draw_pieces();
-            draw_ui();
+            draw_side_panel();
+            draw_menu_bar();  /* Draw menu last so it appears on top */
         }
         
         /* Restore screen target */
@@ -466,6 +703,12 @@ int main() {
         if (keypressed()) {
             int key = readkey();
             int key_code = key & 0xFF;
+            
+            /* If showing help, any key returns to game */
+            if (chess_gui.show_help) {
+                chess_gui.show_help = false;
+                continue;
+            }
             
             switch (key_code) {
                 case 'q':
@@ -504,18 +747,41 @@ int main() {
             }
         }
         
-        /* Handle mouse clicks - only if it's player's turn */
-        if (!ai_should_move || chess_gui.ai_vs_ai) {
-            /* Allow clicks in AI vs AI to watch, or in player's turn */
-        }
-        
-        if (!ai_should_move && !chess_gui.ai_thinking) {
-            poll_mouse();  /* Update mouse state */
+        /* Handle mouse clicks */
+        if ((mouse_b & 1) && !(prev_mouse_b & 1)) {  /* Left button just pressed */
+            int mx = mouse_x;
+            int my = mouse_y;
             
-            if ((mouse_b & 1) && !(prev_mouse_b & 1)) {  /* Left button just pressed */
-                int mx = mouse_x;
-                int my = mouse_y;
-                
+            /* If showing help, click returns to game */
+            if (chess_gui.show_help) {
+                chess_gui.show_help = false;
+                prev_mouse_b = mouse_b;
+                continue;
+            }
+            
+            /* Check menu clicks first */
+            int menu_result = handle_menu_click(mx, my);
+            if (menu_result == 0) {
+                running = false;  /* Quit was selected */
+                prev_mouse_b = mouse_b;
+                continue;
+            }
+            
+            /* If menu was clicked (even if just opened/closed), don't process other clicks */
+            if (chess_gui.show_menu || my < MENU_BAR_HEIGHT) {
+                prev_mouse_b = mouse_b;
+                continue;
+            }
+            
+            /* Check button clicks */
+            if (!handle_button_click(mx, my)) {
+                running = false;  /* Quit button was pressed */
+                prev_mouse_b = mouse_b;
+                continue;
+            }
+            
+            /* Handle board clicks - only if it's player's turn */
+            if (!ai_should_move && !chess_gui.ai_thinking) {
                 /* Convert to board coordinates */
                 if (mx >= BOARD_START_X && mx < BOARD_START_X + 400 && 
                     my >= BOARD_START_Y && my < BOARD_START_Y + 400) {
@@ -556,9 +822,9 @@ int main() {
                     }
                 }
             }
-            
-            prev_mouse_b = mouse_b;  /* Remember current state for next frame */
         }
+        
+        prev_mouse_b = mouse_b;  /* Remember current state for next frame */
         
         /* Small delay to prevent CPU spinning */
         rest(10);  /* 10ms delay */
