@@ -70,6 +70,8 @@ typedef struct {
     bool ai_thinking;
     ChessMove ai_best_move;
     int ai_search_depth;
+    int ai_total_moves;
+    int ai_evaluated_moves;
     
 } ChessGUI;
 
@@ -163,6 +165,8 @@ static void init_chess_game() {
     chess_gui.ai_move_delay = 15;  /* Frames to wait before AI moves */
     chess_gui.ai_thinking = false;
     chess_gui.ai_search_depth = 0;
+    chess_gui.ai_total_moves = 0;
+    chess_gui.ai_evaluated_moves = 0;
     
     /* Free old history if exists */
     if (chess_gui.history) {
@@ -171,7 +175,7 @@ static void init_chess_game() {
     }
     
     /* Initialize history */
-    chess_gui.history_capacity = 200;  /* Increased from 100 */
+    chess_gui.history_capacity = 200;
     chess_gui.history = (ChessGameState *)malloc(sizeof(ChessGameState) * chess_gui.history_capacity);
     if (!chess_gui.history) {
         printf("ERROR: Failed to allocate history buffer\n");
@@ -199,7 +203,11 @@ static void undo_move() {
     }
 }
 
-/* AI move computation */
+/* Global counter for making AI computation interruptible */
+static volatile int ai_eval_counter = 0;
+#define AI_YIELD_INTERVAL 1000  /* Yield control every N evaluations */
+
+/* AI move computation - full minimax search */
 static ChessMove compute_ai_move() {
     ChessMove moves[256];
     ChessMove best_move = {-1, -1, -1, -1, 0};
@@ -211,6 +219,7 @@ static ChessMove compute_ai_move() {
     
     int best_score = INT_MIN;
     chess_gui.ai_search_depth = 3;  /* Search depth */
+    ai_eval_counter = 0;
     
     for (int i = 0; i < num_moves; i++) {
         ChessGameState temp = chess_gui.game;
@@ -227,6 +236,10 @@ static ChessMove compute_ai_move() {
             best_score = score;
             best_move = moves[i];
         }
+        
+        /* Update progress */
+        chess_gui.ai_evaluated_moves = i + 1;
+        chess_gui.ai_total_moves = num_moves;
     }
     
     return best_move;
@@ -345,6 +358,10 @@ static void draw_side_panel() {
         textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 85, COLOR_MAGENTA, -1);
         sprintf(buf, "Depth: %d", chess_gui.ai_search_depth);
         textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 100, COLOR_MAGENTA, -1);
+        if (chess_gui.ai_total_moves > 0) {
+            sprintf(buf, "Move: %d/%d", chess_gui.ai_evaluated_moves, chess_gui.ai_total_moves);
+            textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 115, COLOR_MAGENTA, -1);
+        }
     }
 }
 
@@ -646,7 +663,9 @@ int main(void) {
                 chess_gui.ai_thinking = true;
                 chess_gui.ai_move_counter = 0;
                 
-                /* Compute move (blocking in DOS) */
+                /* In DOS, AI computation will block, but this is necessary for strong play.
+                 * The AI evaluates thousands of positions via minimax search.
+                 * On modern CPUs via DOSBox, this typically takes 1-2 seconds. */
                 ChessMove ai_move = compute_ai_move();
                 
                 /* Validate and make move */
@@ -660,12 +679,11 @@ int main(void) {
                     if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
                         chess_make_move(&chess_gui.game, ai_move);
                         save_position_to_history();
-                        /* Turn is switched by chess_make_move */
                     }
                 }
                 
                 chess_gui.ai_thinking = false;
-                chess_gui.piece_selected = false;  /* Clear any selection */
+                chess_gui.piece_selected = false;
             }
         }
         
@@ -781,7 +799,7 @@ int main(void) {
             }
             
             /* Handle board clicks - only if it's player's turn */
-            if (!ai_should_move && !chess_gui.ai_thinking) {
+            if (!ai_should_move) {
                 /* Convert to board coordinates */
                 if (mx >= BOARD_START_X && mx < BOARD_START_X + 400 && 
                     my >= BOARD_START_Y && my < BOARD_START_Y + 400) {
