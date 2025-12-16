@@ -124,17 +124,21 @@ static void draw_board() {
     #define BOARD_START_Y 60
     #define SQUARE_SIZE 50
     
+    /* Define custom colors for chess board (green and cream/beige) */
+    #define LIGHT_SQUARE 15   /* Light beige/cream color */
+    #define DARK_SQUARE 46    /* Dark green color */
+    
     /* Draw chess board - 50 pixels per square */
     for (y = 0; y < 8; y++) {
         for (x = 0; x < 8; x++) {
             int screen_x = BOARD_START_X + x * SQUARE_SIZE;
             int screen_y = BOARD_START_Y + y * SQUARE_SIZE;
             
-            /* Alternate colors - light on even squares */
+            /* Alternate colors - light beige on even squares, dark green on odd */
             if ((x + y) % 2 == 0) {
-                color = 7;  /* Light (White) */
+                color = LIGHT_SQUARE;  /* Light beige */
             } else {
-                color = 0;  /* Dark (Black) */
+                color = DARK_SQUARE;   /* Dark green */
             }
             
             /* Highlight selected square */
@@ -144,8 +148,9 @@ static void draw_board() {
             
             rectfill(screen, screen_x, screen_y, screen_x + SQUARE_SIZE - 1, screen_y + SQUARE_SIZE - 1, color);
             
-            /* Draw border */
-            rect(screen, screen_x, screen_y, screen_x + SQUARE_SIZE - 1, screen_y + SQUARE_SIZE - 1, COLOR_WHITE);
+            /* Draw subtle border */
+            int border_color = ((x + y) % 2 == 0) ? DARK_SQUARE : LIGHT_SQUARE;
+            rect(screen, screen_x, screen_y, screen_x + SQUARE_SIZE - 1, screen_y + SQUARE_SIZE - 1, border_color);
         }
     }
     
@@ -523,6 +528,21 @@ int main() {
         return 1;
     }
     
+    /* Set up custom palette colors for better board appearance */
+    RGB light_square, dark_square;
+    light_square.r = 58;  /* Beige/cream - light square */
+    light_square.g = 54;
+    light_square.b = 47;
+    dark_square.r = 35;   /* Dark green - dark square */
+    dark_square.g = 45;
+    dark_square.b = 35;
+    
+    set_color(15, &light_square);  /* Set color 15 to light beige */
+    set_color(46, &dark_square);   /* Set color 46 to dark green */
+    
+    /* Show mouse cursor on screen */
+    show_mouse(screen);
+    
     /* Create backbuffer for double buffering */
     BITMAP *backbuffer = create_bitmap(640, 480);
     if (!backbuffer) {
@@ -582,17 +602,14 @@ int main() {
             }
         }
         
-        /* Hide mouse while drawing to prevent flickering */
-        show_mouse(NULL);
-        
-        /* Draw to backbuffer instead of screen */
+        /* Draw to backbuffer (mouse cursor is not drawn to backbuffer) */
         BITMAP *prev_target = screen;
         screen = backbuffer;
         
         /* Clear backbuffer */
         clear_to_color(backbuffer, COLOR_BLACK);
         
-        /* Draw game */
+        /* Draw game (no mouse cursor interference) */
         if (chess_gui.show_help) {
             draw_help_screen();
             chess_gui.show_help = false;
@@ -602,12 +619,14 @@ int main() {
             draw_ui();
         }
         
-        /* Flip buffers - blit backbuffer to screen */
+        /* Restore screen target */
         screen = prev_target;
-        blit(backbuffer, screen, 0, 0, 0, 0, 640, 480);
         
-        /* Show mouse after drawing is complete */
-        show_mouse(screen);
+        /* Hardware mouse cursor is automatically shown on screen buffer */
+        /* Blit the backbuffer to screen - this happens under the mouse cursor */
+        scare_mouse();  /* Temporarily disable mouse drawing */
+        blit(backbuffer, screen, 0, 0, 0, 0, 640, 480);
+        unscare_mouse();  /* Re-enable mouse drawing */
         
         /* Handle input */
         if (keypressed()) {
