@@ -4,11 +4,10 @@
 #include <stdbool.h>
 
 /* Platform detection and conditional includes */
-#if defined(MSDOS)
+#ifdef MSDOS
     /* DOS/DJGPP environment - no pthread support */
     #define BEATCHESS_DOS 1
     #define BEATCHESS_HAS_PTHREAD 0
-    #include "pthread_stub.h"
 #else
     /* Unix/Linux/Windows with modern compiler - pthread support */
     #define BEATCHESS_DOS 0
@@ -53,8 +52,10 @@ typedef struct {
     int current_depth;
     bool has_move;
     bool thinking;
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_t lock;
     pthread_t thread;
+#endif
 } ChessThinkingState;
 
 typedef enum {

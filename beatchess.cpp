@@ -570,24 +570,34 @@ void* chess_think_continuously(void* arg) {
     ChessThinkingState *ts = (ChessThinkingState*)arg;
     
     while (true) {
+#if BEATCHESS_HAS_PTHREAD
         pthread_mutex_lock(&ts->lock);
+#endif
         if (!ts->thinking) {
+#if BEATCHESS_HAS_PTHREAD
             pthread_mutex_unlock(&ts->lock);
+#endif
             usleep(10000);
             continue;
         }
         
         ChessGameState game_copy = ts->game;
+#if BEATCHESS_HAS_PTHREAD
         pthread_mutex_unlock(&ts->lock);
+#endif
         
         ChessMove moves[256];
         int move_count = chess_get_all_moves(&game_copy, game_copy.turn, moves);
         
         if (move_count == 0) {
+#if BEATCHESS_HAS_PTHREAD
             pthread_mutex_lock(&ts->lock);
+#endif
             ts->has_move = false;
             ts->thinking = false;
+#if BEATCHESS_HAS_PTHREAD
             pthread_mutex_unlock(&ts->lock);
+#endif
             //printf("THINK: No legal moves found!\n");
             continue;
         }
@@ -603,9 +613,13 @@ void* chess_think_continuously(void* arg) {
             bool depth_completed = true;
             
             for (int i = 0; i < move_count; i++) {
+#if BEATCHESS_HAS_PTHREAD
                 pthread_mutex_lock(&ts->lock);
                 bool should_stop = !ts->thinking;
                 pthread_mutex_unlock(&ts->lock);
+#else
+                bool should_stop = !ts->thinking;
+#endif
                 
                 if (should_stop) {
                     depth_completed = false;
@@ -637,7 +651,9 @@ void* chess_think_continuously(void* arg) {
             }
             
             // Update if we completed this depth
+#if BEATCHESS_HAS_PTHREAD
             pthread_mutex_lock(&ts->lock);
+#endif
             if (depth_completed && ts->thinking && best_move_count > 0) {
                 ts->best_move = best_moves[rand() % best_move_count];
                 ts->best_score = best_score;
@@ -651,15 +667,21 @@ void* chess_think_continuously(void* arg) {
                           }
                 //printf("       Selected: %c%d->%c%d\n", 'a' + ts->best_move.from_col, 8 - ts->best_move.from_row, 'a' + ts->best_move.to_col, 8 - ts->best_move.to_row);
             }
+#if BEATCHESS_HAS_PTHREAD
             pthread_mutex_unlock(&ts->lock);
+#endif
             
 
         }
         
+#if BEATCHESS_HAS_PTHREAD
         pthread_mutex_lock(&ts->lock);
+#endif
         ts->thinking = false;
         //printf("THINK: Finished thinking, final depth=%d, has_move=%d\n",  ts->current_depth, ts->has_move);
+#if BEATCHESS_HAS_PTHREAD
         pthread_mutex_unlock(&ts->lock);
+#endif
     }
     
     return NULL;
@@ -670,25 +692,35 @@ void chess_init_thinking_state(ChessThinkingState *ts) {
     ts->has_move = false;
     ts->current_depth = 0;
     ts->best_score = 0;
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_init(&ts->lock, NULL);
     pthread_create(&ts->thread, NULL, chess_think_continuously, ts);
+#endif
 }
 
 void chess_start_thinking(ChessThinkingState *ts, ChessGameState *game) {
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_lock(&ts->lock);
+#endif
     ts->game = *game;
     ts->thinking = true;
     ts->has_move = false;
     ts->current_depth = 0;
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_unlock(&ts->lock);
+#endif
 }
 
 ChessMove chess_get_best_move_now(ChessThinkingState *ts) {
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_lock(&ts->lock);
+#endif
     ChessMove move = ts->best_move;
     bool has_move = ts->has_move;
     ts->thinking = false; // Stop thinking
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_unlock(&ts->lock);
+#endif
     
     if (!has_move) {
         // No move found yet - pick random legal move as fallback
@@ -704,9 +736,13 @@ ChessMove chess_get_best_move_now(ChessThinkingState *ts) {
 }
 
 void chess_stop_thinking(ChessThinkingState *ts) {
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_lock(&ts->lock);
+#endif
     ts->thinking = false;
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_unlock(&ts->lock);
+#endif
 }
 
 // ============================================================================
@@ -1425,12 +1461,16 @@ void update_beat_chess(void *vis_ptr, double dt) {
     }
     
     // Track thinking time
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_lock(&chess->thinking_state.lock);
+#endif
     bool is_thinking = chess->thinking_state.thinking;
     bool has_move = chess->thinking_state.has_move;
     int current_depth = chess->thinking_state.current_depth;
     int best_score = chess->thinking_state.best_score;
+#if BEATCHESS_HAS_PTHREAD
     pthread_mutex_unlock(&chess->thinking_state.lock);
+#endif
     
     // Keep incrementing time as long as we haven't made a move yet
     if (is_thinking || has_move) {
@@ -1510,9 +1550,13 @@ void update_beat_chess(void *vis_ptr, double dt) {
         }
         
         // Get depth reached
+#if BEATCHESS_HAS_PTHREAD
         pthread_mutex_lock(&chess->thinking_state.lock);
+#endif
         int depth_reached = chess->thinking_state.current_depth;
+#if BEATCHESS_HAS_PTHREAD
         pthread_mutex_unlock(&chess->thinking_state.lock);
+#endif
         
         // Make the move
         ChessColor moving_color = chess->game.turn;
@@ -1640,6 +1684,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
 }
 
 void chess_cleanup_thinking_state(ChessThinkingState *ts) {
+#if BEATCHESS_HAS_PTHREAD
     // Stop thinking
     pthread_mutex_lock(&ts->lock);
     ts->thinking = false;
@@ -1651,4 +1696,8 @@ void chess_cleanup_thinking_state(ChessThinkingState *ts) {
     
     // Destroy mutex
     pthread_mutex_destroy(&ts->lock);
+#else
+    // DOS version - just stop thinking
+    ts->thinking = false;
+#endif
 }
