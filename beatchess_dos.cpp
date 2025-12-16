@@ -292,17 +292,18 @@ static void show_splash_screen(BITMAP *backbuffer) {
         blit(backbuffer, screen, 0, 0, 0, 0, 640, 480);
         unscare_mouse();
         
-        /* Wait for keypress or timeout (3 seconds) */
-        int timeout = 0;
+        /* Clear any pending keypresses first */
         clear_keybuf();
-        while (timeout < 300 && !keypressed()) {  /* 300 frames * 10ms = 3 seconds */
+        
+        /* Wait for keypress or timeout (10 seconds) */
+        int timeout = 0;
+        while (timeout < 1000) {  /* 1000 frames * 10ms = 10 seconds */
+            if (keypressed()) {
+                readkey();  /* Consume the key */
+                break;
+            }
             rest(10);
             timeout++;
-        }
-        
-        /* Clear the keypress if any */
-        if (keypressed()) {
-            readkey();
         }
         
         /* Cleanup */
