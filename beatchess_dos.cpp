@@ -52,6 +52,9 @@ typedef struct {
     /* Board state */
     int selected_row, selected_col;
     bool piece_selected;
+    int last_move_from_row, last_move_from_col;
+    int last_move_to_row, last_move_to_col;
+    bool has_last_move;
     
     /* History - dynamic allocation (safer for DOS stack limits) */
     ChessGameState *history;
@@ -195,6 +198,11 @@ static void init_chess_game() {
     chess_gui.selected_row = -1;
     chess_gui.selected_col = -1;
     chess_gui.piece_selected = false;
+    chess_gui.last_move_from_row = -1;
+    chess_gui.last_move_from_col = -1;
+    chess_gui.last_move_to_row = -1;
+    chess_gui.last_move_to_col = -1;
+    chess_gui.has_last_move = false;
     chess_gui.show_help = false;
     chess_gui.show_about = false;
     chess_gui.show_menu = false;
@@ -608,7 +616,15 @@ static void draw_board() {
                 color = DARK_SQUARE;   /* Dark green */
             }
             
-            /* Highlight selected square */
+            /* Highlight last move (from and to squares) */
+            if (chess_gui.has_last_move) {
+                if ((y == chess_gui.last_move_from_row && x == chess_gui.last_move_from_col) ||
+                    (y == chess_gui.last_move_to_row && x == chess_gui.last_move_to_col)) {
+                    color = COLOR_CYAN;  /* Cyan highlight for last move */
+                }
+            }
+            
+            /* Highlight selected square (overrides last move highlight) */
             if (chess_gui.piece_selected && chess_gui.selected_row == y && chess_gui.selected_col == x) {
                 color = COLOR_YELLOW;  /* Yellow highlight for selected piece */
             }
@@ -999,6 +1015,13 @@ int main(void) {
                     chess_make_move(&temp, ai_move);
                     
                     if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
+                        /* Record this move for highlighting */
+                        chess_gui.last_move_from_row = ai_move.from_row;
+                        chess_gui.last_move_from_col = ai_move.from_col;
+                        chess_gui.last_move_to_row = ai_move.to_row;
+                        chess_gui.last_move_to_col = ai_move.to_col;
+                        chess_gui.has_last_move = true;
+                        
                         chess_make_move(&chess_gui.game, ai_move);
                         save_position_to_history();
                     }
@@ -1198,6 +1221,13 @@ int main(void) {
                                 chess_make_move(&temp, move);
                                 
                                 if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
+                                    /* Record this move for highlighting */
+                                    chess_gui.last_move_from_row = chess_gui.selected_row;
+                                    chess_gui.last_move_from_col = chess_gui.selected_col;
+                                    chess_gui.last_move_to_row = row;
+                                    chess_gui.last_move_to_col = col;
+                                    chess_gui.has_last_move = true;
+                                    
                                     chess_make_move(&chess_gui.game, move);
                                     save_position_to_history();
                                     /* Turn is switched by chess_make_move */
