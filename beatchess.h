@@ -158,4 +158,6 @@ typedef struct {
     
 } BeatChessVisualization;
 
+bool chess_can_undo(BeatChessVisualization *chess);
+
 #endif // BEATCHESS_H
