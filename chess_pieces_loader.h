@@ -81,8 +81,9 @@ static BITMAP* load_bmp_from_memory(const unsigned char *data, unsigned int len)
             unsigned char g = row_data[col * 3 + 1];
             unsigned char r = row_data[col * 3 + 2];
             
-            /* Treat bright green (0, 255, 0) as transparency */
-            if (r == 0 && g == 255 && b == 0) {
+            /* Treat greenish pixels as transparency (green > red AND green > blue) */
+            /* This catches pure green (0,255,0) and antialiased edges */
+            if (g > r + 30 && g > b + 30 && g > 200) {
                 /* Use the bitmap's mask color */
                 putpixel(bmp, col, row, mask_color);
             } else {
