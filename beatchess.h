@@ -170,6 +170,85 @@ typedef struct {
     
 } BeatChessVisualization;
 
+#ifdef MSDOS
+/* ============================================================================
+ * Color definitions for Allegro 4
+ * ============================================================================
+ */
+
+#define COLOR_BLACK     0
+#define COLOR_BLUE      1
+#define COLOR_GREEN     2
+#define COLOR_CYAN      3
+#define COLOR_RED       4
+#define COLOR_MAGENTA   5
+#define COLOR_YELLOW    6
+#define COLOR_WHITE     7
+#define COLOR_GRAY      8
+
+/* ============================================================================
+ * UI Button Structure
+ * ============================================================================
+ */
+
+typedef struct {
+    int x, y, w, h;
+    const char *label;
+    int hotkey;  /* Keyboard shortcut */
+    bool enabled;
+} Button;
+
+/* ============================================================================
+ * Global game state
+ * ============================================================================
+ */
+
+typedef struct {
+    ChessGameState game;
+    
+    /* Board state */
+    int selected_row, selected_col;
+    int piece_selected_row, piece_selected_col;  /* Track where piece was selected from */
+    bool piece_selected;
+    int last_move_from_row, last_move_from_col;
+    int last_move_to_row, last_move_to_col;
+    bool has_last_move;
+    
+    /* History - dynamic allocation (safer for DOS stack limits) */
+    ChessGameState *history;
+    int history_size;
+    int history_capacity;
+    
+    /* UI state */
+    bool show_help;
+    bool show_about;
+    bool show_menu;
+    int menu_selected;
+    bool ai_vs_ai;
+    bool player_is_white;
+    
+    /* AI state */
+    int ai_move_delay;
+    int ai_move_counter;
+    bool ai_thinking;
+    bool ai_computing;  /* NEW: true when AI is actually in compute_ai_move() */
+    ChessMove ai_best_move;
+    int ai_search_depth;
+    int ai_total_moves;
+    int ai_evaluated_moves;
+    
+    /* Timer state */
+    int white_time_seconds;
+    int white_time_frames;
+    int black_time_seconds;
+    int black_time_frames;
+    bool timer_started;
+    int ai_thinking_start_time;  /* Track when AI started thinking */
+    
+} ChessGUI;
+
+#endif
+
 /* Function declarations */
 bool chess_can_undo(BeatChessVisualization *chess);
 void chess_init_board(ChessGameState *game);
@@ -178,5 +257,8 @@ void chess_execute_move(ChessGameState *game, int fr, int fc, int tr, int tc);
 bool chess_is_in_bounds(int r, int c);
 bool chess_is_path_clear(ChessGameState *game, int fr, int fc, int tr, int tc);
 void chess_make_move(ChessGameState *game, ChessMove move);
+
+
+
 
 #endif // BEATCHESS_H
