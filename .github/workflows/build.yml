@@ -33,7 +33,7 @@ jobs:
 
     - name: Build MS-DOS Version
       run: |
-        make
+        make -f Makefile.dos
         //g++ beatchess_dos.cpp beatchess.cpp -o beatchss.exe
         //exe2coff beatchss.exe
         //cat csdpmi/bin/CWSDSTUB.EXE beatchss > beatchss.exe
