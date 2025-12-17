@@ -999,7 +999,7 @@ int main(void) {
     printf("Displaying splash screen...\n");
     show_splash_screen(backbuffer);
     
-    init_chess_gui(void);
+    init_chess_gui();
 
     bool running = true;
     int prev_mouse_b = 0;  /* Track previous mouse button state */
