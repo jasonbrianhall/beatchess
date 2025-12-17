@@ -33,9 +33,10 @@ jobs:
 
     - name: Build MS-DOS Version
       run: |
-        g++ beatchess_dos.cpp beatchess.cpp -o beatchss.exe
-        exe2coff beatchss.exe
-        cat csdpmi/bin/CWSDSTUB.EXE beatchss > beatchss.exe
+        make
+        //g++ beatchess_dos.cpp beatchess.cpp -o beatchss.exe
+        //exe2coff beatchss.exe
+        //cat csdpmi/bin/CWSDSTUB.EXE beatchss > beatchss.exe
         
     - name: Create MS-DOS Distribution
       run: |
