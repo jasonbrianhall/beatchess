@@ -37,14 +37,40 @@
 #define LIGHT_SQUARE 15   /* Light beige/cream color */
 #define DARK_SQUARE 46    /* Dark green color */
 
+/* ============================================================================
+ * Board Color Palettes
+ * ============================================================================
+ */
+
+/* Dark (Black) square color palette */
+int dark_color_palette[] = {
+    46,    /* 0: Dark green (original) */
+    0,     /* 1: Black */
+    1,     /* 2: Dark blue */
+    4,     /* 3: Dark red */
+    6,     /* 4: Dark cyan */
+    8,     /* 5: Dark gray */
+};
+#define DARK_PALETTE_SIZE (sizeof(dark_color_palette) / sizeof(dark_color_palette[0]))
+
+/* Light (White) square color palette */
+int light_color_palette[] = {
+    15,    /* 0: Light beige/cream (original) */
+    7,     /* 1: Light gray */
+    11,    /* 2: Light cyan */
+    14,    /* 3: Light yellow */
+    13,    /* 4: Light magenta */
+    10,    /* 5: Light green */
+};
+#define LIGHT_PALETTE_SIZE (sizeof(light_color_palette) / sizeof(light_color_palette[0]))
+
 
 
 ChessGUI chess_gui;
 
-/* ============================================================================
- * Straight Buffer History Helpers
- * ============================================================================
- */
+/* Color palette indices */
+int dark_color_idx = 0;    /* Index into dark_color_palette */
+int light_color_idx = 0;   /* Index into light_color_palette */
 
 /**
  * Retrieve a game state from history at logical position.
@@ -255,25 +281,22 @@ void save_position_to_history() {
  * Save position with the move that created it (for better undo/replay)
  */
 void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c) {
-    printToSerial("DEBUG: Entering save_position_to_history_with_move (from %d,%d to %d,%d)\n",
-                  from_r, from_c, to_r, to_c);
+    //printToSerial("DEBUG: Entering save_position_to_history_with_move (from %d,%d to %d,%d)\n", from_r, from_c, to_r, to_c);
 
     /* Ensure move_history_index is in valid range (defensive against corruption) */
     if (chess_gui.move_history_index < 0 || chess_gui.move_history_index >= chess_gui.history_capacity) {
-        printToSerial("WARNING: move_history_index (%d) out of range [0..%d], resyncing to history_size (%d)\n",
-                      chess_gui.move_history_index, chess_gui.history_capacity - 1, chess_gui.history_size);
+        //printToSerial("WARNING: move_history_index (%d) out of range [0..%d], resyncing to history_size (%d)\n", chess_gui.move_history_index, chess_gui.history_capacity - 1, chess_gui.history_size);
         chess_gui.move_history_index = chess_gui.history_size;
     }
     
     /* Don't save if buffer is full - prevent overflow */
     if (chess_gui.move_history_index >= chess_gui.history_capacity) {
-        printToSerial("ERROR: Buffer full, cannot save move. index=%d capacity=%d\n",
-                      chess_gui.move_history_index, chess_gui.history_capacity);
+        //printToSerial("ERROR: Buffer full, cannot save move. index=%d capacity=%d\n", chess_gui.move_history_index, chess_gui.history_capacity);
         return;
     }
     
     /* Store at current write position */
-    printToSerial("DEBUG: Saving move at index %d\n", chess_gui.move_history_index);
+    //printToSerial("DEBUG: Saving move at index %d\n", chess_gui.move_history_index);
     chess_gui.history[chess_gui.move_history_index] = chess_gui.game;
     chess_gui.move_history[chess_gui.move_history_index].game_state = chess_gui.game;
     chess_gui.move_history[chess_gui.move_history_index].move.from_row = from_r;
@@ -286,69 +309,68 @@ void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to
     chess_gui.move_history_index++;
     chess_gui.history_size = chess_gui.move_history_index;  /* Keep synchronized */
     chess_gui.move_history_count = chess_gui.history_size;
-    printToSerial("DEBUG: Counters updated -> move_history_index=%d history_size=%d move_history_count=%d\n",
-                  chess_gui.move_history_index, chess_gui.history_size, chess_gui.move_history_count);
+    //printToSerial("DEBUG: Counters updated -> move_history_index=%d history_size=%d move_history_count=%d\n", chess_gui.move_history_index, chess_gui.history_size, chess_gui.move_history_count);
     
     /* Start timer after first move is saved (when we have 2+ positions) */
     if (chess_gui.history_size == 2) {
         chess_gui.timer_started = true;
-        printToSerial("DEBUG: Timer started (history_size=%d)\n", chess_gui.history_size);
+        //printToSerial("DEBUG: Timer started (history_size=%d)\n", chess_gui.history_size);
     }
 
-    printToSerial("DEBUG: Exiting save_position_to_history_with_move\n");
+    //printToSerial("DEBUG: Exiting save_position_to_history_with_move\n");
 }
 
 
 void undo_move() {
-    printToSerial("\n\nIn Undo Move\n");
+    //printToSerial("\n\nIn Undo Move\n");
 
     /* Don't allow undo while AI is computing */
     if (chess_gui.ai_computing) { 
-        printToSerial("AI computing, abort undo\n");
+        //printToSerial("AI computing, abort undo\n");
         return;
     }
     
     /* Safety check - make sure we have history initialized */
     /*if (!chess_gui.history || !chess_gui.move_history || chess_gui.history_capacity <= 0) {
-        printToSerial("exit 1: history not initialized\n");
+        //printToSerial("exit 1: history not initialized\n");
         return;
     }*/
     
     /* Can't undo if we only have the initial position (need at least 2 positions) */
     if (chess_gui.history_size < 2) {
-        printToSerial("exit 2: not enough history %i\n", chess_gui.history_size);
+        //printToSerial("exit 2: not enough history %i\n", chess_gui.history_size);
         return;
     }
     
     /* Determine how many moves to undo */
     int moves_to_undo = chess_gui.ai_vs_ai ? 1 : 2;
-    printToSerial("moves_to_undo = %d\n", moves_to_undo);
+    //printToSerial("moves_to_undo = %d\n", moves_to_undo);
     
     /* Don't undo more moves than we have (must keep initial position at index 0) */
     if (chess_gui.history_size - moves_to_undo < 1) {
         moves_to_undo = chess_gui.history_size - 1;
-        printToSerial("adjusted moves_to_undo = %d\n", moves_to_undo);
+        //printToSerial("adjusted moves_to_undo = %d\n", moves_to_undo);
     }
     
     /* Safety check: can't undo if we'd go past the beginning */
     if (moves_to_undo <= 0) {
-        printToSerial("exit 3: moves_to_undo <= 0\n");
+        //printToSerial("exit 3: moves_to_undo <= 0\n");
         return;
     }
     
     /* CRITICAL: Calculate indices BEFORE modifying history_size */
     int restore_index = chess_gui.history_size - moves_to_undo - 1;
     int last_move_index = restore_index;
-    printToSerial("restore_index = %d, last_move_index = %d\n", restore_index, last_move_index);
+    //printToSerial("restore_index = %d, last_move_index = %d\n", restore_index, last_move_index);
     
     /* Validate restore_index with full bounds checking */
     if (restore_index < 0) {
-        printToSerial("restore_index < 0, resetting\n");
+        //printToSerial("restore_index < 0, resetting\n");
         restore_index = 0;
         last_move_index = -1;
     }
     if (restore_index >= chess_gui.history_capacity) {
-        //printToSerial("restore_index >= capacity, resetting\n");
+        ////printToSerial("restore_index >= capacity, resetting\n");
         chess_gui.history_size = 1;
         restore_index = 0;
         last_move_index = -1;
@@ -356,11 +378,11 @@ void undo_move() {
     
     /* Now it's safe to update history_size */
     chess_gui.history_size -= moves_to_undo;
-    //printToSerial("new history_size = %d\n", chess_gui.history_size);
+    ////printToSerial("new history_size = %d\n", chess_gui.history_size);
     
     /* Extra safety: ensure we didn't underflow */
     if (chess_gui.history_size < 1) {
-        printToSerial("history_size underflow, resetting\n");
+        //printToSerial("history_size underflow, resetting\n");
         chess_gui.history_size = 1;
         restore_index = 0;
         last_move_index = -1;
@@ -368,10 +390,10 @@ void undo_move() {
     
     /* Restore game state from the valid restore_index */
     if (restore_index >= 0 && restore_index < chess_gui.history_capacity) {
-        printToSerial("Restoring game state from index %d\n", restore_index);
+        //printToSerial("Restoring game state from index %d\n", restore_index);
         chess_gui.game = chess_gui.history[restore_index];
     } else {
-        printToSerial("Invalid restore_index, reinitializing board\n");
+        //printToSerial("Invalid restore_index, reinitializing board\n");
         chess_init_board(&chess_gui.game);
         last_move_index = -1;
     }
@@ -383,31 +405,31 @@ void undo_move() {
     /* Restore the last move display */
     if (last_move_index > 0 && last_move_index < chess_gui.history_capacity) {
         int previous_move_index = last_move_index - 1;
-        printToSerial("last_move_index = %d, previous_move_index = %d\n", last_move_index, previous_move_index);
+        //printToSerial("last_move_index = %d, previous_move_index = %d\n", last_move_index, previous_move_index);
         if (previous_move_index >= 0 && previous_move_index < chess_gui.history_capacity) {
             ChessMove prev_move = chess_gui.move_history[previous_move_index].move;
             if (prev_move.from_row >= 0) {
-                printToSerial("Restoring last move display\n");
+                //printToSerial("Restoring last move display\n");
                 chess_gui.last_move_from_row = prev_move.from_row;
                 chess_gui.last_move_from_col = prev_move.from_col;
                 chess_gui.last_move_to_row = prev_move.to_row;
                 chess_gui.last_move_to_col = prev_move.to_col;
                 chess_gui.has_last_move = true;
             } else {
-                printToSerial("Invalid prev_move, clearing last move\n");
+                //printToSerial("Invalid prev_move, clearing last move\n");
                 chess_gui.has_last_move = false;
             }
         } else {
-            printToSerial("previous_move_index out of bounds\n");
+            //printToSerial("previous_move_index out of bounds\n");
             chess_gui.has_last_move = false;
         }
     } else {
-        printToSerial("No last move to show\n");
+        //printToSerial("No last move to show\n");
         chess_gui.has_last_move = false;
     }
     
     /* Clear piece selection after undo */
-    printToSerial("Clearing piece selection\n");
+    //printToSerial("Clearing piece selection\n");
     chess_gui.piece_selected = false;
     chess_gui.piece_selected_row = -1;
     chess_gui.piece_selected_col = -1;
@@ -415,7 +437,7 @@ void undo_move() {
     chess_gui.selected_col = -1;
     
     /* Clear AI state */
-    //printToSerial("Resetting AI state\n");
+    ////printToSerial("Resetting AI state\n");
     chess_gui.ai_thinking = false;
     chess_gui.ai_computing = false;
     chess_gui.ai_move_counter = 0;
@@ -730,6 +752,10 @@ void draw_board() {
     int x, y, color;
     char buf[64];
     
+    /* Get current colors from palettes */
+    int current_light = light_color_palette[light_color_idx % LIGHT_PALETTE_SIZE];
+    int current_dark = dark_color_palette[dark_color_idx % DARK_PALETTE_SIZE];
+    
     /* Draw chess board - 50 pixels per square */
     for (y = 0; y < 8; y++) {
         for (x = 0; x < 8; x++) {
@@ -738,9 +764,9 @@ void draw_board() {
             
             /* Alternate colors - light beige on even squares, dark green on odd */
             if ((x + y) % 2 == 0) {
-                color = LIGHT_SQUARE;  /* Light beige */
+                color = current_light;  /* Light color */
             } else {
-                color = DARK_SQUARE;   /* Dark green */
+                color = current_dark;   /* Dark color */
             }
             
             /* Highlight last move (from and to squares) */
@@ -764,7 +790,7 @@ void draw_board() {
             rectfill(screen, screen_x, screen_y, screen_x + SQUARE_SIZE - 1, screen_y + SQUARE_SIZE - 1, color);
             
             /* Draw subtle border */
-            int border_color = ((x + y) % 2 == 0) ? DARK_SQUARE : LIGHT_SQUARE;
+            int border_color = ((x + y) % 2 == 0) ? current_dark : current_light;
             rect(screen, screen_x, screen_y, screen_x + SQUARE_SIZE - 1, screen_y + SQUARE_SIZE - 1, border_color);
         }
     }
@@ -1585,6 +1611,31 @@ int main(void) {
                     
                 case '?':
                     chess_gui.show_help = true;
+                    break;
+                    
+                default:
+                    /* Check for function keys for board colors */
+                    switch (key_scancode) {
+                        case KEY_F5:
+                            /* F5: Black color next */
+                            dark_color_idx = (dark_color_idx + 1) % DARK_PALETTE_SIZE;
+                            break;
+                            
+                        case KEY_F6:
+                            /* F6: Black color previous */
+                            dark_color_idx = (dark_color_idx - 1 + DARK_PALETTE_SIZE) % DARK_PALETTE_SIZE;
+                            break;
+                            
+                        case KEY_F7:
+                            /* F7: White color next */
+                            light_color_idx = (light_color_idx + 1) % LIGHT_PALETTE_SIZE;
+                            break;
+                            
+                        case KEY_F8:
+                            /* F8: White color previous */
+                            light_color_idx = (light_color_idx - 1 + LIGHT_PALETTE_SIZE) % LIGHT_PALETTE_SIZE;
+                            break;
+                    }
                     break;
             }
         }
