@@ -30,20 +30,17 @@ jobs:
         apt-get install -y wget unzip zip
 
     - name: Download CSDPMI
-      working-directory: msdos
       run: |
         wget http://na.mirror.garr.it/mirrors/djgpp/current/v2misc/csdpmi7b.zip
         unzip -o csdpmi7b.zip -d csdpmi
 
     - name: Build MS-DOS Version
-      working-directory: msdos
       run: |
         g++ beatchess_dos.cpp beatchess.cpp -o beatchss.exe
         exe2coff beatchss.exe
         cat csdpmi/bin/CWSDSTUB.EXE beatchss > beatchss.exe
         
     - name: Create MS-DOS Distribution
-      working-directory: msdos
       run: |
         mkdir beatchess-msdos-v1.0
         cp beatchss.exe beatchess-msdos-v1.0/
