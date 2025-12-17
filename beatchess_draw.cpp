@@ -398,6 +398,130 @@ void draw_beat_chess(void *vis_ptr, cairo_t *cr) {
     draw_chess_undo_button(chess, cr, width, height);
 }
 
+void draw_chess_flip_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    // Only show flip button in Player vs AI mode
+    if (!chess->player_vs_ai) return;
+    
+    // Button position and size - LEFT SIDE, below PvsA button
+    double button_width = 120;
+    double button_height = 40;
+    double button_x = 20;  // LEFT side, same as other buttons
+    double button_y = 120;  // Below PvsA button (70 + 40 + 10 spacing)
+    
+    // Store button position for hit detection
+    chess->flip_button_x = button_x;
+    chess->flip_button_y = button_y;
+    chess->flip_button_width = button_width;
+    chess->flip_button_height = button_height;
+    
+    // Background
+    cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_fill(cr);
+    
+    // Glow effect if hovered
+    if (chess->flip_button_hovered || chess->flip_button_glow > 0) {
+        double glow_alpha = chess->flip_button_glow * 0.5;
+        if (chess->flip_button_hovered) glow_alpha = 0.4;
+        
+        cairo_set_source_rgba(cr, 0.2, 0.7, 1.0, glow_alpha);  // Blue glow
+        cairo_rectangle(cr, button_x - 3, button_y - 3, button_width + 6, button_height + 6);
+        cairo_stroke(cr);
+    }
+    
+    // Border - highlight if board is flipped
+    cairo_set_source_rgb(cr, chess->flip_button_hovered ? 0.3 : (chess->board_flipped ? 0.4 : 0.5), 
+                         chess->flip_button_hovered ? 0.9 : (chess->board_flipped ? 0.9 : 0.7), 
+                         chess->flip_button_hovered ? 1.0 : (chess->board_flipped ? 1.0 : 0.6));
+    cairo_set_line_width(cr, chess->board_flipped ? 3 : 2);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_stroke(cr);
+    
+    // Text
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 12);
+    
+    const char *button_text = "FLIP BOARD";
+    
+    cairo_text_extents_t extents;
+    cairo_text_extents(cr, button_text, &extents);
+    
+    double text_x = button_x + (button_width - extents.width) / 2;
+    double text_y = button_y + (button_height + extents.height) / 2;
+    
+    cairo_set_source_rgb(cr, chess->flip_button_hovered ? 0.3 : (chess->board_flipped ? 0.4 : 0.8), 
+                         chess->flip_button_hovered ? 0.9 : (chess->board_flipped ? 0.9 : 0.6), 
+                         chess->flip_button_hovered ? 1.0 : (chess->board_flipped ? 1.0 : 0.2));
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, button_text);
+}
+
+void draw_chess_undo_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    // Only show undo button in Player vs AI mode
+    if (!chess->player_vs_ai) return;
+    
+    // Button position and size - LEFT SIDE, below FLIP button
+    double button_width = 120;
+    double button_height = 40;
+    double button_x = 20;  // LEFT side, same as other buttons
+    double button_y = 170;  // Below FLIP button (120 + 40 + 10 spacing)
+    
+    // Store button position for hit detection
+    chess->undo_button_x = button_x;
+    chess->undo_button_y = button_y;
+    chess->undo_button_width = button_width;
+    chess->undo_button_height = button_height;
+    
+    // Disable button if can't undo
+    bool can_undo = chess_can_undo(chess);
+    
+    // Background
+    cairo_set_source_rgb(cr, can_undo ? 0.15 : 0.08, can_undo ? 0.15 : 0.08, can_undo ? 0.15 : 0.08);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_fill(cr);
+    
+    // Glow effect if hovered and enabled
+    if ((chess->undo_button_hovered || chess->undo_button_glow > 0) && can_undo) {
+        double glow_alpha = chess->undo_button_glow * 0.5;
+        if (chess->undo_button_hovered) glow_alpha = 0.4;
+        
+        cairo_set_source_rgba(cr, 1.0, 0.4, 0.2, glow_alpha);
+        cairo_rectangle(cr, button_x - 3, button_y - 3, button_width + 6, button_height + 6);
+        cairo_stroke(cr);
+    }
+    
+    // Border
+    if (can_undo) {
+        cairo_set_source_rgb(cr, chess->undo_button_hovered ? 1.0 : 0.6, 
+                             chess->undo_button_hovered ? 0.4 : 0.3, 
+                             chess->undo_button_hovered ? 0.2 : 0.2);
+    } else {
+        cairo_set_source_rgb(cr, 0.3, 0.3, 0.3);
+    }
+    cairo_set_line_width(cr, 2);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_stroke(cr);
+    
+    // Text
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 14);
+    
+    cairo_text_extents_t extents;
+    cairo_text_extents(cr, "UNDO", &extents);
+    
+    double text_x = button_x + (button_width - extents.width) / 2;
+    double text_y = button_y + (button_height + extents.height) / 2;
+    
+    if (can_undo) {
+        cairo_set_source_rgb(cr, chess->undo_button_hovered ? 1.0 : 0.8, 
+                             chess->undo_button_hovered ? 0.6 : 0.4, 
+                             chess->undo_button_hovered ? 0.3 : 0.2);
+    } else {
+        cairo_set_source_rgb(cr, 0.4, 0.4, 0.4);
+    }
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, "UNDO");
+}
 
 // ============================================================================
 // PUBLIC DRAWING FUNCTION (with toggle support)
