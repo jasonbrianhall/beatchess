@@ -5,6 +5,7 @@
 #include <string.h>
 #include <limits.h>
 #include <math.h>
+#include <time.h>
 #include <unistd.h>
 #ifdef MSDOS
 #include "math_compat.h"
@@ -877,6 +878,14 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
 void init_beat_chess_system(void *vis_ptr) {
     Visualizer *vis = (Visualizer*)vis_ptr;
     BeatChessVisualization *chess = &vis->beat_chess;
+    
+    // Seed random number generator once at system initialization
+    // This ensures variety in AI moves (pawn promotion, move selection, etc.)
+    static int seeded = 0;
+    if (!seeded) {
+        srand((unsigned int)time(NULL));
+        seeded = 1;
+    }
     
     // Initialize game
     chess_init_board(&chess->game);

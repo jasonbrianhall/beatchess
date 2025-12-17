@@ -1,9 +1,15 @@
+/*
+ * beatchess_dos_enhanced.cpp - BeatChess DOS/Allegro 4 with Menu System
+ * Enhanced version with File menu and side buttons
+ */
+
 #include <allegro.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <time.h>
 #include "beatchess.h"
 #include "chess_pieces.h"
 #include "chess_pieces_loader.h"
@@ -823,6 +829,9 @@ int main(void) {
     install_keyboard();
     install_mouse();
     install_timer();
+    
+    /* Seed random number generator with current time for variety in AI moves */
+    srand((unsigned int)time(NULL));
     
     /* Set graphics mode */
     if (set_gfx_mode(GFX_AUTODETECT, 640, 480, 0, 0) != 0) {
