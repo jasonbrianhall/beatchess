@@ -427,7 +427,8 @@ void chess_make_move(ChessGameState *game, ChessMove move) {
         if ((piece.color == WHITE && move.to_row == 0) || 
             (piece.color == BLACK && move.to_row == 7)) {
             // Promote to queen (90% of the time) or knight (10% for variety)
-            game->board[move.to_row][move.to_col].type = (rand() % 10 == 0) ? KNIGHT : QUEEN;
+            //game->board[move.to_row][move.to_col].type = (rand() % 10 == 0) ? KNIGHT : QUEEN;
+            game->board[move.to_row][move.to_col].type = QUEEN;
         }
     }
     
@@ -1073,9 +1074,8 @@ void* chess_think_continuously(void* arg) {
             ChessMove best_moves[256];
             int best_move_count = 0;
             int best_score = (game_copy.turn == WHITE) ? INT_MIN : INT_MAX;
-            
+              
             bool depth_completed = true;
-            
             for (int i = 0; i < move_count; i++) {
 #if BEATCHESS_HAS_PTHREAD
                 pthread_mutex_lock(&ts->lock);
@@ -1119,13 +1119,54 @@ void* chess_think_continuously(void* arg) {
             pthread_mutex_lock(&ts->lock);
 #endif
             if (depth_completed && ts->thinking && best_move_count > 0) {
-                ts->best_move = best_moves[rand() % best_move_count];
+                // ========== RANDOMNESS: Consider near-best moves ==========
+                // Collect all moves within a threshold of the best score
+                ChessMove candidate_moves[256];
+                int candidate_count = 0;
+                int threshold = 500;  // Consider moves within 50 centipawns of best
+                
+                printf("\n\n");
+                for (int i = 0; i < move_count; i++) {
+                    ChessGameState temp = game_copy;
+                    chess_make_move(&temp, moves[i]);
+                    int score = chess_minimax(&temp, depth - 1, INT_MIN, INT_MAX, 
+                                             game_copy.turn == BLACK);
+                    bool is_close = false;
+                    if (game_copy.turn == WHITE) {
+                        is_close = (score >= best_score - threshold);
+                    } else {
+                        is_close = (score <= best_score + threshold);
+                    }
+                    
+                    if (is_close) {
+                        candidate_moves[candidate_count++] = moves[i];
+                    }
+                    printf("Scores %i, move_count %i i %i\n", score, move_count, i);
+                }
+
+                printf("Players turn is %s\n", (game_copy.turn == WHITE) ? "White" : "Black");
+                printf("candidate count is %i best_move count is %i\n", candidate_count, best_move_count);
+
+                // Randomly select from candidate moves
+                // This gives higher-scoring moves more chances to be picked
+                // but lower-scoring moves still have a chance
+                if (candidate_count > 0) {
+                    printf("At 1\n");
+                    int choice=rand() % candidate_count;
+                    ts->best_move = candidate_moves[choice];
+                    printf("Picking %i\n", choice);
+                } else {
+                    printf("At 2\n");
+
+                    ts->best_move = best_moves[rand() % best_move_count];
+                }
+                
                 ts->best_score = best_score;
                 ts->current_depth = depth;
                 ts->has_move = true;
                 
                 // Debug output - print all best moves
-                //printf("THINK: Depth %d complete (score=%d, %s), found %d best move(s):\n", depth, best_score, game_copy.turn == WHITE ? "WHITE" : "BLACK", best_move_count);
+                //printf("THINK: Depth %d complete (score=%d, %s), found %d best move(s), %d candidates:\n", depth, best_score, game_copy.turn == WHITE ? "WHITE" : "BLACK", best_move_count, candidate_count);
                 for (int i = 0; i < best_move_count; i++) {
                     //printf("       %c%d->%c%d", 'a' + best_moves[i].from_col, 8 - best_moves[i].from_row, 'a' + best_moves[i].to_col, 8 - best_moves[i].to_row);
                           }
@@ -2018,6 +2059,11 @@ void update_beat_chess(void *vis_ptr, double dt) {
         
         // Determine which color the player is controlling
         ChessColor player_color_local = chess->board_flipped ? BLACK : WHITE;
+        
+        printf("DEBUG: player_vs_ai=%d, turn=%s, player_color=%s\n",
+               chess->player_vs_ai,
+               chess->game.turn == WHITE ? "WHITE" : "BLACK",
+               player_color_local == WHITE ? "WHITE" : "BLACK");
         
         // In Player vs AI mode: don't autoplay if it's the player's turn
         if (chess->player_vs_ai && chess->game.turn == player_color_local) {

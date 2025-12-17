@@ -291,8 +291,16 @@ gboolean ai_move_timeout(gpointer data) {
         gui->status = CHESS_PLAYING;
         gui->move_count = 0;
         gui->last_from_row = -1;
-        chess_start_thinking(&gui->thinking_state, &gui->game);
         gui->ai_think_time = 0;
+        
+        // Only start thinking if it's AI's turn in new game
+        bool ai_should_think = (gui->player_is_white && gui->game.turn == BLACK) ||
+                               (!gui->player_is_white && gui->game.turn == WHITE) ||
+                               gui->zero_players;
+        if (ai_should_think) {
+            chess_start_thinking(&gui->thinking_state, &gui->game);
+        }
+        
         update_status_text(gui);
         gtk_widget_queue_draw(gui->drawing_area);
         return G_SOURCE_CONTINUE;
@@ -555,8 +563,13 @@ int main(int argc, char *argv[]) {
     gui.history_size = 1;
     gui.move_history[0] = gui.game;  // Save initial position
     
-    // Start AI thinking
-    chess_start_thinking(&gui.thinking_state, &gui.game);
+    // Start AI thinking only if it's AI's turn
+    // (Don't think for player's turn at game start)
+    bool ai_should_think = (gui.player_is_white && gui.game.turn == BLACK) ||
+                           (!gui.player_is_white && gui.game.turn == WHITE);
+    if (ai_should_think) {
+        chess_start_thinking(&gui.thinking_state, &gui.game);
+    }
     
     // Create window
     gui.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
