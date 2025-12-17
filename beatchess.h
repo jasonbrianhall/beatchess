@@ -17,7 +17,9 @@
 #endif
 
 #define BOARD_SIZE 8
-#define MAX_CHESS_DEPTH 10
+#ifndef MAX_CHESS_DEPTH
+#define MAX_CHESS_DEPTH 4
+#endif
 #define BEAT_HISTORY_SIZE 10
 #define MAX_MOVES_BEFORE_DRAW 300
 #define MAX_MOVE_HISTORY (2 * MAX_MOVES_BEFORE_DRAW)  /* 600 - straight buffer, 2x moves before stalemate */

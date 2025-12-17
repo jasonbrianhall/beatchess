@@ -1530,7 +1530,6 @@ void init_beat_chess_system(void *vis_ptr) {
     chess->has_selected_piece = false;
     chess->selected_piece_was_pressed = false;
     
-    printf("Beat chess system initialized\n");
 }
 
 bool beat_chess_detect_beat(void *vis_ptr) {
@@ -2069,8 +2068,6 @@ void update_beat_chess(void *vis_ptr, double dt) {
     
     // AUTO-PLAY: Check if we should play immediately
     bool should_auto_play = false;
-    printf("DEBUG AUTO-PLAY CHECK: auto_play_enabled=%d has_move=%d time_thinking=%.2f min_think_time=%.2f\n",
-           chess->auto_play_enabled, has_move, chess->time_thinking, chess->min_think_time);
     
     if (chess->auto_play_enabled && has_move && 
         chess->time_thinking >= chess->min_think_time) {
@@ -2078,25 +2075,18 @@ void update_beat_chess(void *vis_ptr, double dt) {
         // Determine which color the player is controlling
         ChessColor player_color_local = chess->board_flipped ? BLACK : WHITE;
         
-        printf("DEBUG: player_vs_ai=%d, turn=%s, player_color=%s\n",
-               chess->player_vs_ai,
-               chess->game.turn == WHITE ? "WHITE" : "BLACK",
-               player_color_local == WHITE ? "WHITE" : "BLACK");
         
         // In Player vs AI mode: don't autoplay if it's the player's turn
         if (chess->player_vs_ai && chess->game.turn == player_color_local) {
             should_auto_play = false;
-            printf("  -> Player's turn, no autoplay\n");
         }
         // Force move after 4 seconds regardless of depth/evaluation
         else if (chess->time_thinking >= 4.0) {
             should_auto_play = true;
-            printf("  -> 4 second timeout, autoplay!\n");
         }
         // Play if we've reached depth 3 or 4
         else if (current_depth >= 3) {
             should_auto_play = true;
-            printf("  -> Reached depth %d, autoplay!\n", current_depth);
         }
         // Or if we found a really good move (even at depth 2)
         else {
@@ -2104,18 +2094,13 @@ void update_beat_chess(void *vis_ptr, double dt) {
             int advantage = (chess->game.turn == WHITE) ? 
                            (best_score - eval_before) : (eval_before - best_score);
             
-            printf("  -> Depth %d, eval_before=%d best_score=%d advantage=%d threshold=%d\n",
-                   current_depth, eval_before, best_score, advantage, chess->good_move_threshold);
             
             if (advantage > chess->good_move_threshold && current_depth >= 2) {
                 should_auto_play = true;
-                printf("  -> Good move found, autoplay!\n");
             } else {
-                printf("  -> Not auto-playing yet\n");
             }
         }
     } else {
-        printf("  -> Conditions not met for autoplay\n");
     }
     
     // Detect beat OR auto-play trigger
@@ -2134,25 +2119,17 @@ void update_beat_chess(void *vis_ptr, double dt) {
     }
     
     if (should_make_move) {
-        printf("\n\nTRIGGER MOVE EXECUTION: beat_detected=%d should_auto_play=%d\n", beat_detected, should_auto_play);
         
         // Get current evaluation
         int eval_before = chess_evaluate_position(&chess->game);
         
         // Force move
         ChessMove forced_move = chess_get_best_move_now(&chess->thinking_state);
-        printf("DEBUG RETRIEVED: from_row=%d from_col=%d to_row=%d to_col=%d\n", 
-               forced_move.from_row, forced_move.from_col,
-               forced_move.to_row, forced_move.to_col);
-        printf("DEBUG: Selected move %c%d->%c%d\n", 
-               'a' + forced_move.from_col, 8 - forced_move.from_row,
-               'a' + forced_move.to_col, 8 - forced_move.to_row);
         
         // Validate move
         if (!chess_is_valid_move(&chess->game, 
                                  forced_move.from_row, forced_move.from_col,
                                  forced_move.to_row, forced_move.to_col)) {
-            printf("DEBUG: Move is INVALID!\n");
             chess_start_thinking(&chess->thinking_state, &chess->game);
             chess->time_thinking = 0;
             return;
@@ -2162,13 +2139,11 @@ void update_beat_chess(void *vis_ptr, double dt) {
         ChessGameState temp_game = chess->game;
         chess_make_move(&temp_game, forced_move);
         if (chess_is_in_check(&temp_game, chess->game.turn)) {
-            printf("DEBUG: Move leaves king in check!\n");
             chess_start_thinking(&chess->thinking_state, &chess->game);
             chess->time_thinking = 0;
             return;
         }
         
-        printf("DEBUG: Move is VALID, executing...\n");
         
         // Get depth reached
 #if BEATCHESS_HAS_PTHREAD
@@ -2181,10 +2156,6 @@ void update_beat_chess(void *vis_ptr, double dt) {
         
         // Make the move
         ChessColor moving_color = chess->game.turn;
-        printf("EXECUTING MOVE: from=%c%d to=%c%d (depth reached: %d)\n",
-               'a' + forced_move.from_col, 8 - forced_move.from_row,
-               'a' + forced_move.to_col, 8 - forced_move.to_row,
-               depth_reached);
         chess_make_move(&chess->game, forced_move);
         
         // Track time and save move history (only in Player vs AI mode)
