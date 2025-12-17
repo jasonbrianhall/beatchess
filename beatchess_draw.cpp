@@ -370,6 +370,35 @@ static void draw_geometric_piece(cairo_t *cr, PieceType type, ChessColor color, 
     }
 }
 
+void draw_beat_chess(void *vis_ptr, cairo_t *cr) {
+    Visualizer *vis = (Visualizer*)vis_ptr;
+    BeatChessVisualization *chess = &vis->beat_chess;
+    
+    // Calculate board layout
+    int width = vis->width;
+    int height = vis->height;
+    
+    double available_width = width * 0.8;
+    double available_height = height * 0.8;
+    
+    chess->cell_size = fmin(available_width / 8, available_height / 8);
+    chess->board_offset_x = (width - chess->cell_size * 8) / 2;
+    chess->board_offset_y = (height - chess->cell_size * 8) / 2;
+    
+    // Draw components
+    draw_chess_board(chess, cr);
+    draw_chess_last_move_highlight(chess, cr);
+    draw_chess_pieces(chess, cr);
+    draw_chess_eval_bar(chess, cr, width, height);
+    draw_chess_status(chess, cr, width, height);
+    // Draw buttons
+    draw_chess_reset_button(chess, cr, width, height);
+    draw_chess_pvsa_button(chess, cr, width, height);
+    draw_chess_flip_button(chess, cr, width, height);
+    draw_chess_undo_button(chess, cr, width, height);
+}
+
+
 // ============================================================================
 // PUBLIC DRAWING FUNCTION (with toggle support)
 // ============================================================================
