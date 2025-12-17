@@ -34,12 +34,11 @@ typedef struct {
     int score;
 } ScoredMove;
 
-static bool chess_should_eliminate_move(ChessGameState *game, ChessMove move, int depth) {
+static bool chess_should_eliminate_move(ChessGameState *game, ChessMove move, int depth, int initial_depth) {
     static int piece_values[] = {0, 100, 320, 330, 500, 900, 20000};
     
     ChessPiece attacker = game->board[move.from_row][move.from_col];
     ChessPiece target = game->board[move.to_row][move.to_col];
-    ChessPiece moving_piece = game->board[move.from_row][move.from_col];
     
     // ========== RULE 1: BAD TRADES (Most important for depth) ==========
     // Eliminate captures where we lose much more than we gain
@@ -62,39 +61,33 @@ static bool chess_should_eliminate_move(ChessGameState *game, ChessMove move, in
     
     // ========== RULE 2: MOVING INTO DANGER (Critical for safety) ==========
     // Don't move pieces into positions where they can be immediately captured
-    // AND we lose material in the exchange
     if (target.type == EMPTY && attacker.type != KING) {
-        // Check if this piece will be hanging (capturable)
+        // Check if this piece will be hanging (capturable and undefended)
         ChessGameState temp = *game;
         chess_make_move(&temp, move);
         
-        // Find what can capture our piece and what we can recapture with
-        ChessPiece moved_piece = temp.board[move.to_row][move.to_col];
+        // Is there an enemy piece that can capture this?
+        bool capturable = false;
+        int cheapest_attacker_value = 30000;  // Infinity
         
-        // Check all possible captures on this square
         for (int r = 0; r < 8; r++) {
             for (int c = 0; c < 8; c++) {
                 ChessPiece enemy = temp.board[r][c];
-                if (enemy.type != EMPTY && enemy.color != moved_piece.color) {
+                if (enemy.type != EMPTY && enemy.color != attacker.color) {
                     // Can this enemy piece capture our piece?
                     if (chess_is_valid_move(&temp, r, c, move.to_row, move.to_col)) {
-                        // Yes! Enemy can capture our piece
-                        // Now check: what do we lose?
-                        
-                        int our_piece_value = piece_values[moved_piece.type];
-                        int enemy_piece_value = piece_values[enemy.type];
-                        
-                        // If enemy piece is worth MORE than our piece, we lose material
-                        // This is a bad trade - eliminate it
-                        if (enemy_piece_value > our_piece_value) {
-                            // Exception: Allow if it gives check (forcing, might have other benefits)
-                            if (!chess_is_in_check(&temp, moved_piece.color)) {
-                                return true;  // ELIMINATE: Bad forced trade
-                            }
+                        capturable = true;
+                        if (piece_values[enemy.type] < cheapest_attacker_value) {
+                            cheapest_attacker_value = piece_values[enemy.type];
                         }
                     }
                 }
             }
+        }
+        
+        // If capturable by cheaper piece, eliminate
+        if (capturable && cheapest_attacker_value < piece_values[attacker.type]) {
+            return true;  // ELIMINATE: Piece would be hanging
         }
     }
     
@@ -108,31 +101,35 @@ static bool chess_should_eliminate_move(ChessGameState *game, ChessMove move, in
     }
     
     // ========== RULE 4: DEPTH-BASED AGGRESSIVE FILTERING ==========
-    // At deeper depths, be MORE aggressive in filtering
-    if (depth >= 4) {
-        // At deep depths, eliminate quiet moves to reduce branching
-        // Keep: captures, checks, pawn advances, but eliminate "random" moves
+    // Use initial_depth to determine how aggressive to be
+    // initial_depth - depth = how many plies deep we are from root
+    int plies_from_root = initial_depth - depth;
+    
+    // In the first 3 plies from root, be VERY aggressive
+    if (plies_from_root <= 2) {
+        // At shallow tree levels (close to root), eliminate quiet moves
+        // Keep: captures, checks, pawn advances
         
         if (target.type == EMPTY) {  // Quiet move (not a capture)
             // AGGRESSIVE: Only keep if it's a pawn advance
             if (attacker.type != PAWN) {
-                // At very deep depths (6+), only keep forcing moves
-                if (depth >= 6) {
+                // At very shallow (0-1 plies from root), only keep forcing moves
+                if (plies_from_root <= 1) {
                     // Check if it gives check
                     ChessGameState temp = *game;
                     chess_make_move(&temp, move);
                     if (!chess_is_in_check(&temp, game->turn == WHITE ? BLACK : WHITE)) {
-                        return true;  // ELIMINATE: Not forcing at deep depth
+                        return true;  // ELIMINATE: Not forcing at shallow depth
                     }
                 }
             }
         }
     }
     
-    // ========== RULE 5: LAZY EVAL AT VERY DEEP DEPTHS ==========
-    // At extreme depths, use evaluation to pre-filter moves
-    if (depth >= 7) {
-        // Quick eval: if position doesn't improve, skip it
+    // ========== RULE 5: LAZY EVAL AT DEEP DEPTHS ==========
+    // Apply evaluation-based filtering when we're deep in the tree
+    if (plies_from_root >= initial_depth - 2) {
+        // At deep levels, use evaluation to pre-filter moves
         ChessGameState temp = *game;
         int eval_before = chess_evaluate_position(&temp);
         
@@ -832,7 +829,7 @@ void chess_clear_search_tables() {
 }
 
 int chess_aggressive_filter_moves(ChessGameState *game, ChessMove *moves, 
-                                        int count, int depth) {
+                                        int count, int depth, int initial_depth) {
     int good_count = 0;
     ChessMove good_moves[256];
     
@@ -844,7 +841,7 @@ int chess_aggressive_filter_moves(ChessGameState *game, ChessMove *moves,
     
     for (int i = 0; i < count; i++) {
         // Skip moves that should be eliminated
-        if (chess_should_eliminate_move(game, moves[i], depth)) {
+        if (chess_should_eliminate_move(game, moves[i], depth, initial_depth)) {
             continue;
         }
         
@@ -948,7 +945,8 @@ static void chess_order_moves_by_score(ChessGameState *game, ChessMove *moves, i
 // ENHANCED MINIMAX WITH AGGRESSIVE PATH ELIMINATION
 // ============================================================================
 
-int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing) {
+// Internal minimax function with initial_depth tracking
+int chess_minimax_internal(ChessGameState *game, int depth, int initial_depth, int alpha, int beta, bool maximizing) {
     
     ChessMove moves[256];
     int move_count = chess_get_all_moves(game, game->turn, moves);
@@ -967,17 +965,13 @@ int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool max
     
     // ========== KEY: AGGRESSIVE PATH ELIMINATION ==========
     // This is what lets us go deep without CPU death
-    move_count = chess_aggressive_filter_moves(game, moves, move_count, depth);
+    move_count = chess_aggressive_filter_moves(game, moves, move_count, depth, initial_depth);
     
     if (move_count == 0) {
         // All moves filtered - shouldn't happen often
-        // Fall back to static evaluation
+        // Fall back to evaluation
         return chess_evaluate_position(game);
     }
-    
-    // ========== SORT REMAINING MOVES ==========
-    // Put best moves first for better alpha-beta pruning
-    chess_order_moves_by_score(game, moves, move_count);
     
     // ========== STANDARD MINIMAX WITH ALPHA-BETA ==========
     if (maximizing) {
@@ -987,7 +981,7 @@ int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool max
             ChessGameState temp = *game;
             chess_make_move(&temp, moves[i]);
             
-            int eval = chess_minimax(&temp, depth - 1, alpha, beta, false);
+            int eval = chess_minimax_internal(&temp, depth - 1, initial_depth, alpha, beta, false);
             
             max_eval = (eval > max_eval) ? eval : max_eval;
             alpha = (alpha > eval) ? alpha : eval;
@@ -1007,7 +1001,7 @@ int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool max
             ChessGameState temp = *game;
             chess_make_move(&temp, moves[i]);
             
-            int eval = chess_minimax(&temp, depth - 1, alpha, beta, true);
+            int eval = chess_minimax_internal(&temp, depth - 1, initial_depth, alpha, beta, true);
             
             min_eval = (eval < min_eval) ? eval : min_eval;
             beta = (beta < eval) ? beta : eval;
@@ -1021,6 +1015,15 @@ int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool max
         return min_eval;
     }
 }
+
+// Public API - wrapper that maintains compatibility
+// This is what external code calls
+int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing) {
+    // Call internal function with depth as initial_depth (first call)
+    return chess_minimax_internal(game, depth, depth, alpha, beta, maximizing);
+}
+
+
 
 
 // ============================================================================

@@ -223,7 +223,7 @@ void make_ai_move(ChessGUI *gui) {
     // Black minimizes (wants negative scores)
     bool we_are_white = (gui->game.turn == WHITE);
     int best_score = we_are_white ? INT_MIN : INT_MAX;
-    int search_depth = 4;
+    int search_depth = 5;
     
     for (int i = 0; i < num_moves; i++) {
         ChessGameState temp = gui->game;
