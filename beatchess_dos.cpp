@@ -650,7 +650,6 @@ ChessMove compute_ai_move() {
     if (candidate_count > 0) {
         int choice = rand() % candidate_count;
         best_move = candidate_moves[choice].move;
-        printf("Randomly selected move %d of %d candidates\n", choice, candidate_count);
     }
     
     return best_move;
