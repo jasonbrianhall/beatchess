@@ -1,4 +1,4 @@
-name: Build Sudoku
+name: Build Beatchess 
 
 on:
   push:
@@ -33,7 +33,8 @@ jobs:
 
     - name: Build MS-DOS Version
       run: |
-        make -f Makefile.dos
+        make -f Makefile.dosenv
+        cp build/dos/*.exe .  
         //g++ beatchess_dos.cpp beatchess.cpp -o beatchss.exe
         //exe2coff beatchss.exe
         //cat csdpmi/bin/CWSDSTUB.EXE beatchss > beatchss.exe
