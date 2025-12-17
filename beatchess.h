@@ -20,7 +20,7 @@
 #define MAX_CHESS_DEPTH 10
 #define BEAT_HISTORY_SIZE 10
 #define MAX_MOVE_HISTORY 256
-
+#define MAX_MOVES_BEFORE_DRAW 300
 /* ============================================================================
  * Circular Buffer Macros for Move History
  * ============================================================================

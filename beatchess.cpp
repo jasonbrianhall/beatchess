@@ -15,8 +15,6 @@
 // CORE CHESS ENGINE
 // ============================================================================
 
-#define MAX_MOVES_BEFORE_DRAW 300
-
 bool chess_is_in_bounds(int r, int c) {
     return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
 }
