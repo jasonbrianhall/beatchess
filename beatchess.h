@@ -231,10 +231,11 @@ typedef struct {
     int last_move_to_row, last_move_to_col;
     bool has_last_move;
     
-    /* History - dynamic allocation (safer for DOS stack limits) */
+    /* History - dynamic allocation with circular buffer support */
     ChessGameState *history;
-    int history_size;
-    int history_capacity;
+    int history_size;           /* Number of moves currently in buffer (0 to capacity) */
+    int history_capacity;       /* Maximum buffer size */
+    int history_start;          /* Index of oldest move (for circular buffer) */
     
     /* UI state */
     bool show_help;
