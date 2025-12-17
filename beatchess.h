@@ -2,6 +2,7 @@
 #define BEATCHESS_H
 
 #include <stdbool.h>
+#include <string.h>
 
 /* Platform detection and conditional includes */
 #ifdef MSDOS
@@ -16,9 +17,18 @@
 #endif
 
 #define BOARD_SIZE 8
-#define MAX_CHESS_DEPTH 4
+#define MAX_CHESS_DEPTH 10
 #define BEAT_HISTORY_SIZE 10
 #define MAX_MOVE_HISTORY 256
+
+/* ============================================================================
+ * Circular Buffer Macros for Move History
+ * ============================================================================
+ */
+#define MOVE_HISTORY_NEXT(idx) (((idx) + 1) % MAX_MOVE_HISTORY)
+#define MOVE_HISTORY_PREV(idx) (((idx) - 1 + MAX_MOVE_HISTORY) % MAX_MOVE_HISTORY)
+#define MOVE_HISTORY_AT(buffer, idx) ((buffer)[(idx) % MAX_MOVE_HISTORY])
+#define MOVE_HISTORY_IS_FULL(count) ((count) >= MAX_MOVE_HISTORY)
 
 typedef enum { EMPTY, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING } PieceType;
 typedef enum { NONE, WHITE, BLACK } ChessColor;
@@ -156,9 +166,10 @@ typedef struct {
     double cell_size;
     int move_count;
     
-    // Move history
+    // Move history (circular buffer)
     MoveHistory move_history[MAX_MOVE_HISTORY];
-    int move_history_count;
+    int move_history_count;      // Total number of moves made (increments continuously)
+    int move_history_index;      // Current write position in circular buffer
     
     // Time tracking
     double white_total_time;  // Cumulative time for White
@@ -269,6 +280,48 @@ void chess_execute_move(ChessGameState *game, int fr, int fc, int tr, int tc);
 bool chess_is_in_bounds(int r, int c);
 bool chess_is_path_clear(ChessGameState *game, int fr, int fc, int tr, int tc);
 void chess_make_move(ChessGameState *game, ChessMove move);
+
+/* ============================================================================
+ * Circular Buffer Helper Functions
+ * ============================================================================
+ */
+
+/**
+ * Get the actual index in the circular buffer for a given move position.
+ * @param move_position Position in history (0 = oldest available, MAX_MOVE_HISTORY-1 = newest)
+ * @param move_count Total number of moves ever made
+ * @return Actual index in the circular buffer array
+ */
+static inline int chess_get_history_index(int move_position, int move_count) {
+    if (move_count <= MAX_MOVE_HISTORY) {
+        return move_position;
+    }
+    return (move_count - MAX_MOVE_HISTORY + move_position) % MAX_MOVE_HISTORY;
+}
+
+/**
+ * Get a move from history at a given position (0 = oldest available, newest = count-1)
+ */
+static inline MoveHistory chess_get_move_from_history(BeatChessVisualization *chess, int position) {
+    if (position < 0 || position >= chess->move_history_count) {
+        MoveHistory empty;
+        memset(&empty, 0, sizeof(MoveHistory));
+        return empty;
+    }
+    // If we have fewer moves than buffer size, just use position directly
+    if (chess->move_history_count <= MAX_MOVE_HISTORY) {
+        return chess->move_history[position];
+    }
+    // Otherwise, calculate actual index from circular buffer
+    int start_index = (chess->move_history_index + MAX_MOVE_HISTORY - chess->move_history_count % MAX_MOVE_HISTORY) % MAX_MOVE_HISTORY;
+    int actual_index = (start_index + position) % MAX_MOVE_HISTORY;
+    return chess->move_history[actual_index];
+}
+
+/**
+ * Add a move to the history using circular buffer logic
+ */
+void chess_save_move_history(BeatChessVisualization *chess, ChessMove move, double time_elapsed);
 
 
 

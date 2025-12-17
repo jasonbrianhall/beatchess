@@ -769,12 +769,16 @@ ChessGameStatus chess_check_game_status(ChessGameState *game) {
 // ============================================================================
 
 void chess_save_move_history(BeatChessVisualization *chess, ChessMove move, double time_spent) {
-    if (chess->move_history_count < MAX_MOVE_HISTORY) {
-        chess->move_history[chess->move_history_count].game_state = chess->game;
-        chess->move_history[chess->move_history_count].move = move;
-        chess->move_history[chess->move_history_count].time_elapsed = time_spent;
-        chess->move_history_count++;
-    }
+    // Store move at current index position
+    chess->move_history[chess->move_history_index].game_state = chess->game;
+    chess->move_history[chess->move_history_index].move = move;
+    chess->move_history[chess->move_history_index].time_elapsed = time_spent;
+    
+    // Advance write position (wraps around)
+    chess->move_history_index = MOVE_HISTORY_NEXT(chess->move_history_index);
+    
+    // Increment total move count (never wraps, used to track how many moves total)
+    chess->move_history_count++;
 }
 
 bool chess_can_undo(BeatChessVisualization *chess) {
@@ -803,15 +807,14 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
     // So we go back 2 moves in history
     
     if (chess->move_history_count >= 2) {
-        // Get the AI's move (most recent, at index count-1)
-        // Get the player's move before it (at index count-2)
-        MoveHistory *player_move = &chess->move_history[chess->move_history_count - 2];
-        MoveHistory *ai_move = &chess->move_history[chess->move_history_count - 1];
+        // Get the last two moves using the helper function
+        MoveHistory *player_move = &MOVE_HISTORY_AT(chess->move_history, chess->move_history_count - 2);
+        MoveHistory *ai_move = &MOVE_HISTORY_AT(chess->move_history, chess->move_history_count - 1);
         
         // Restore to the state BEFORE the player's move
         // We need to go back 3 moves worth: to before the previous AI move
         if (chess->move_history_count >= 3) {
-            chess->game = chess->move_history[chess->move_history_count - 3].game_state;
+            chess->game = MOVE_HISTORY_AT(chess->move_history, chess->move_history_count - 3).game_state;
         } else {
             // Only 2 moves in history - this was the first exchange
             // Go back to starting position
@@ -834,8 +837,9 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
         if (chess->white_total_time < 0) chess->white_total_time = 0;
         if (chess->black_total_time < 0) chess->black_total_time = 0;
         
-        // Remove the 2 moves from history
+        // Remove the 2 moves from history count
         chess->move_history_count -= 2;
+        // Note: move_history_index stays as is - circular buffer naturally handles this
         
         strcpy(chess->status_text, "Moves undone - your turn to play again");
         chess->status_flash_color[0] = 0.2;
@@ -846,16 +850,18 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
         chess_init_board(&chess->game);
         
         // Subtract time for player's move (using correct color)
+        MoveHistory *first_move = &MOVE_HISTORY_AT(chess->move_history, 0);
         if (player_color == WHITE) {
-            chess->white_total_time -= chess->move_history[0].time_elapsed;
+            chess->white_total_time -= first_move->time_elapsed;
         } else {
-            chess->black_total_time -= chess->move_history[0].time_elapsed;
+            chess->black_total_time -= first_move->time_elapsed;
         }
         
         if (chess->white_total_time < 0) chess->white_total_time = 0;
         if (chess->black_total_time < 0) chess->black_total_time = 0;
         
         chess->move_history_count = 0;
+        chess->move_history_index = 0;
         
         strcpy(chess->status_text, "Opening move undone - try again");
         chess->status_flash_color[0] = 0.2;
@@ -977,6 +983,7 @@ void init_beat_chess_system(void *vis_ptr) {
     
     // Move history
     chess->move_history_count = 0;
+    chess->move_history_index = 0;
     
     // Time tracking
     chess->white_total_time = 0.0;
@@ -1244,6 +1251,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
             
             // Clear move history
             chess->move_history_count = 0;
+            chess->move_history_index = 0;
             
             // Clear selection
             chess->has_selected_piece = false;

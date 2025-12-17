@@ -75,6 +75,69 @@ const char *menu_items[] = {
 
 #define NUM_MENU_ITEMS (sizeof(menu_items) / sizeof(menu_items[0]))
 
+void init_chess_gui(void) {
+    chess_gui.game.turn = WHITE;
+    chess_gui.game.white_king_moved = false;
+    chess_gui.game.black_king_moved = false;
+    chess_gui.game.white_rook_a_moved = false;
+    chess_gui.game.white_rook_h_moved = false;
+    chess_gui.game.black_rook_a_moved = false;
+    chess_gui.game.black_rook_h_moved = false;
+    chess_gui.game.en_passant_col = -1;
+    chess_gui.game.en_passant_row = -1;
+    
+    chess_gui.selected_row = -1;
+    chess_gui.selected_col = -1;
+    chess_gui.piece_selected_row = -1;
+    chess_gui.piece_selected_col = -1;
+    chess_gui.piece_selected = false;
+    
+    chess_gui.last_move_from_row = -1;
+    chess_gui.last_move_from_col = -1;
+    chess_gui.last_move_to_row = -1;
+    chess_gui.last_move_to_col = -1;
+    chess_gui.has_last_move = false;
+    
+    chess_gui.show_help = false;
+    chess_gui.show_about = false;
+    chess_gui.show_menu = false;
+    chess_gui.menu_selected = -1;
+    
+    chess_gui.ai_vs_ai = false;
+    chess_gui.player_is_white = true;
+    chess_gui.ai_move_delay = 15;
+    chess_gui.ai_move_counter = 0;
+    chess_gui.ai_thinking = false;
+    chess_gui.ai_computing = false;
+    chess_gui.ai_search_depth = 3;
+    chess_gui.ai_total_moves = 0;
+    chess_gui.ai_evaluated_moves = 0;
+    
+    chess_gui.ai_best_move.from_row = -1;
+    chess_gui.ai_best_move.from_col = -1;
+    chess_gui.ai_best_move.to_row = -1;
+    chess_gui.ai_best_move.to_col = -1;
+    chess_gui.ai_best_move.score = 0;
+    
+    chess_gui.white_time_seconds = 0;
+    chess_gui.white_time_frames = 0;
+    chess_gui.black_time_seconds = 0;
+    chess_gui.black_time_frames = 0;
+    chess_gui.timer_started = false;
+    chess_gui.ai_thinking_start_time = 0;
+    
+    chess_gui.is_in_check = false;
+    chess_gui.check_display_timer = 0;
+    chess_gui.is_checkmate = false;
+    chess_gui.is_stalemate = false;
+    
+    chess_gui.history = NULL;
+    chess_gui.history_size = 0;
+    chess_gui.history_capacity = 0;
+    
+    chess_init_board(&chess_gui.game);
+}
+
 /* ============================================================================
  * Helper functions
  * ============================================================================
@@ -936,63 +999,8 @@ int main(void) {
     printf("Displaying splash screen...\n");
     show_splash_screen(backbuffer);
     
-    /* Initialize game - manually set all fields instead of using memset */
-    /* Board state */
-    chess_gui.selected_row = -1;
-    chess_gui.selected_col = -1;
-    chess_gui.piece_selected_row = -1;
-    chess_gui.piece_selected_col = -1;
-    chess_gui.piece_selected = false;
-    chess_gui.last_move_from_row = -1;
-    chess_gui.last_move_from_col = -1;
-    chess_gui.last_move_to_row = -1;
-    chess_gui.last_move_to_col = -1;
-    chess_gui.has_last_move = false;
-    
-    /* History */
-    chess_gui.history = NULL;
-    chess_gui.history_size = 0;
-    chess_gui.history_capacity = 0;
-    
-    /* UI state */
-    chess_gui.show_help = false;
-    chess_gui.show_about = false;
-    chess_gui.show_menu = false;
-    chess_gui.menu_selected = -1;
-    chess_gui.ai_vs_ai = false;
-    chess_gui.player_is_white = true;
-    
-    /* AI state */
-    chess_gui.ai_move_delay = 15;
-    chess_gui.ai_move_counter = 0;
-    chess_gui.ai_thinking = false;
-    chess_gui.ai_computing = false;
-    chess_gui.ai_best_move.from_row = -1;
-    chess_gui.ai_best_move.from_col = -1;
-    chess_gui.ai_best_move.to_row = -1;
-    chess_gui.ai_best_move.to_col = -1;
-    chess_gui.ai_best_move.score = 0;
-    chess_gui.ai_search_depth = 0;
-    chess_gui.ai_total_moves = 0;
-    chess_gui.ai_evaluated_moves = 0;
-    
-    /* Timer state */
-    chess_gui.white_time_seconds = 0;
-    chess_gui.white_time_frames = 0;
-    chess_gui.black_time_seconds = 0;
-    chess_gui.black_time_frames = 0;
-    chess_gui.timer_started = false;
-    chess_gui.ai_thinking_start_time = 0;
-    
-    /* Check/Checkmate/Stalemate display */
-    chess_gui.is_in_check = false;
-    chess_gui.check_display_timer = 0;
-    chess_gui.is_checkmate = false;
-    chess_gui.is_stalemate = false;
-    
-    /* Initialize the game board and state */
-    init_chess_game();
-    
+    init_chess_gui(void);
+
     bool running = true;
     int prev_mouse_b = 0;  /* Track previous mouse button state */
     
