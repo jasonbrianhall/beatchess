@@ -85,7 +85,7 @@ compile: allegro
 	@g++ -c beatchess_dos.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/dos_main.o
 	@g++ $(OBJ_DIR)/*.o -L$(BUILD_DIR)/source-install/lib -lalleg -lm $(CFLAGS) -s -o $(BUILD_DIR)/beatchess
 	@echo "Converting to COFF format..."
-	@exe2coff $(BUILD_DIR)/beatchess
+	@exe2coff $(BUILD_DIR)/beatchess.exe
 	@echo "Adding DPMI stub..."
 	@cat $(CSDPMI_DIR)/bin/CWSDSTUB.EXE $(BUILD_DIR)/beatchess > $(BUILD_DIR)/$(DOS_TARGET)
 	@rm $(BUILD_DIR)/beatchess
