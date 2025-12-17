@@ -20,6 +20,7 @@ typedef struct {
     GtkWidget *window;
     GtkWidget *drawing_area;
     GtkWidget *status_label;
+    GtkWidget *render_mode_item;  // Menu item for render mode
     
     ChessGameState game;
     ChessThinkingState thinking_state;
@@ -61,6 +62,14 @@ void on_flip_board(GtkWidget *widget, gpointer data);
 void on_undo_move(GtkWidget *widget, gpointer data);
 void on_toggle_player_color(GtkWidget *widget, gpointer data);
 void save_position_to_history(ChessGUI *gui);
+void on_toggle_render_mode(GtkWidget *widget, gpointer data);
+void update_render_mode_label(GtkWidget *menu_item);
+
+// External functions from beatchess_draw.cpp
+extern void init_sprite_cache();
+extern void cleanup_sprite_cache();
+extern void set_rendering_mode(bool sprites);
+extern bool get_rendering_mode();
 
 gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     ChessGUI *gui = (ChessGUI*)data;
@@ -447,10 +456,32 @@ void on_undo_move(GtkWidget *widget, gpointer data) {
     gtk_widget_queue_draw(gui->drawing_area);
 }
 
+void update_render_mode_label(GtkWidget *menu_item) {
+    bool using_sprites = get_rendering_mode();
+    if (using_sprites) {
+        gtk_menu_item_set_label(GTK_MENU_ITEM(menu_item), "Render Mode: Sprites");
+    } else {
+        gtk_menu_item_set_label(GTK_MENU_ITEM(menu_item), "Render Mode: Geometric");
+    }
+}
+
+void on_toggle_render_mode(GtkWidget *widget, gpointer data) {
+    ChessGUI *gui = (ChessGUI*)data;
+    
+    bool current_mode = get_rendering_mode();
+    set_rendering_mode(!current_mode);
+    
+    update_render_mode_label(gui->render_mode_item);
+    gtk_widget_queue_draw(gui->drawing_area);
+}
+
 int main(int argc, char *argv[]) {
     srand(time(NULL));
     
     gtk_init(&argc, &argv);
+    
+    // Initialize sprite cache
+    init_sprite_cache();
     
     ChessGUI gui;
     memset(&gui, 0, sizeof(gui));
@@ -538,6 +569,17 @@ int main(int argc, char *argv[]) {
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_item), file_menu);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_item);
     
+    // View menu (new)
+    GtkWidget *view_menu = gtk_menu_new();
+    GtkWidget *view_item = gtk_menu_item_new_with_label("View");
+    
+    gui.render_mode_item = gtk_menu_item_new_with_label("Render Mode: Geometric");
+    g_signal_connect(gui.render_mode_item, "activate", G_CALLBACK(on_toggle_render_mode), &gui);
+    gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), gui.render_mode_item);
+    
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(view_item), view_menu);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), view_item);
+    
     // Help menu
     GtkWidget *help_menu = gtk_menu_new();
     GtkWidget *help_item = gtk_menu_item_new_with_label("Help");
@@ -574,6 +616,12 @@ int main(int argc, char *argv[]) {
     g_timeout_add(1000, ai_move_timeout, &gui);
     
     gtk_main();
+    
+    // Cleanup
+    cleanup_sprite_cache();
+    if (gui.move_history) {
+        free(gui.move_history);
+    }
     
     return 0;
 }
