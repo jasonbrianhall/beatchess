@@ -80,20 +80,20 @@ const char *menu_items[] = {
  * ============================================================================
  */
 
-static void draw_text(int x, int y, int color, const char *text) {
+void draw_text(int x, int y, int color, const char *text) {
     textout_ex(screen, font, text, x, y, color, -1);
 }
 
-static void draw_text_center(int x, int y, int color, const char *text) {
+void draw_text_center(int x, int y, int color, const char *text) {
     int len = strlen(text) * 8;  /* Approximate width */
     textout_ex(screen, font, text, x - len/2, y, color, -1);
 }
 
-static bool point_in_rect(int px, int py, int x, int y, int w, int h) {
+bool point_in_rect(int px, int py, int x, int y, int w, int h) {
     return (px >= x && px < x + w && py >= y && py < y + h);
 }
 
-static void cleanup_chess_game() {
+void cleanup_chess_game() {
     if (chess_gui.history) {
         free(chess_gui.history);
         chess_gui.history = NULL;
@@ -102,7 +102,7 @@ static void cleanup_chess_game() {
     chess_gui.history_capacity = 0;
 }
 
-static void init_chess_game() {
+void init_chess_game() {
     /* CRITICAL: Don't allow new game while AI is computing - this causes crashes! */
     if (chess_gui.ai_computing) {
         return;
@@ -187,7 +187,7 @@ static void init_chess_game() {
     chess_gui.history[chess_gui.history_size++] = chess_gui.game;
 }
 
-static void save_position_to_history() {
+void save_position_to_history() {
     /* Safety check */
     if (!chess_gui.history || chess_gui.history_size >= chess_gui.history_capacity) {
         return;  /* Can't save if no buffer or buffer is full */
@@ -201,7 +201,7 @@ static void save_position_to_history() {
     }
 }
 
-static void undo_move() {
+void undo_move() {
     /* Don't allow undo while AI is computing */
     if (chess_gui.ai_computing) {
         return;
@@ -236,7 +236,7 @@ static volatile int ai_eval_counter = 0;
 #define AI_YIELD_INTERVAL 1000  /* Yield control every N evaluations */
 
 /* Display splash screen and wait for keypress or timeout */
-static void show_splash_screen(BITMAP *backbuffer) {
+void show_splash_screen(BITMAP *backbuffer) {
     /* Load the splash screen - need to handle 8-bit indexed BMPs differently */
     const unsigned char *data = splashscreen_bmp;
     unsigned int len = splashscreen_bmp_len;
@@ -405,7 +405,7 @@ static ChessMove compute_ai_move() {
  * ============================================================================
  */
 
-static void draw_menu_bar() {
+void draw_menu_bar() {
     /* Menu bar background */
     rectfill(screen, 0, 0, 640, MENU_BAR_HEIGHT, COLOR_BLUE);
     
@@ -450,7 +450,7 @@ static void draw_menu_bar() {
     }
 }
 
-static void draw_button(Button *btn, bool hover) {
+void draw_button(Button *btn, bool hover) {
     int bg_color = btn->enabled ? (hover ? COLOR_CYAN : COLOR_BLUE) : COLOR_GRAY;
     int text_color = btn->enabled ? (hover ? COLOR_BLACK : COLOR_WHITE) : COLOR_BLACK;
     
@@ -467,7 +467,7 @@ static void draw_button(Button *btn, bool hover) {
     textout_ex(screen, font, btn->label, text_x, text_y, text_color, -1);
 }
 
-static void draw_side_panel() {
+void draw_side_panel() {
     /* Panel background - don't draw over the board */
     rectfill(screen, BUTTON_PANEL_X - 10, MENU_BAR_HEIGHT, 
              640, 480, COLOR_BLACK);
@@ -536,7 +536,7 @@ static void draw_side_panel() {
     }
 }
 
-static void draw_board() {
+void draw_board() {
     int x, y, color;
     char buf[64];
     
@@ -597,7 +597,7 @@ static void draw_board() {
          BOARD_START_X + 8 * SQUARE_SIZE, BOARD_START_Y + 8 * SQUARE_SIZE, COLOR_WHITE);
 }
 
-static void draw_piece_at_square(int x, int y, ChessPiece piece) {
+void draw_piece_at_square(int x, int y, ChessPiece piece) {
     if (piece.type == EMPTY) return;
     
     int screen_x = BOARD_START_X + x * SQUARE_SIZE + SQUARE_SIZE / 2;
@@ -610,7 +610,7 @@ static void draw_piece_at_square(int x, int y, ChessPiece piece) {
     }
 }
 
-static void draw_pieces() {
+void draw_pieces() {
     for (int y = 0; y < 8; y++) {
         for (int x = 0; x < 8; x++) {
             ChessPiece piece = chess_gui.game.board[y][x];
@@ -619,7 +619,7 @@ static void draw_pieces() {
     }
 }
 
-static void draw_check_status() {
+void draw_check_status() {
     /* Only draw if something needs to be displayed */
     bool should_draw = (chess_gui.check_display_timer > 0) || 
                        chess_gui.is_checkmate || 
@@ -672,7 +672,7 @@ static void draw_check_status() {
                       text_color, -1);
 }
 
-static void draw_help_screen() {
+void draw_help_screen() {
     int y = 50;
     
     rectfill(screen, 0, 0, 640, 480, COLOR_BLACK);
@@ -701,7 +701,7 @@ static void draw_help_screen() {
     draw_text_center(320, y + 20, COLOR_GREEN, "Press any key to continue...");
 }
 
-static void draw_about_screen() {
+void draw_about_screen() {
     int y = 80;
     
     rectfill(screen, 0, 0, 640, 480, COLOR_BLACK);
@@ -736,7 +736,7 @@ static void draw_about_screen() {
  * ============================================================================
  */
 
-static int execute_menu_action(int index) {
+int execute_menu_action(int index) {
     switch (index) {
         case 0:  /* New Game */
             init_chess_game();
@@ -772,7 +772,7 @@ static int execute_menu_action(int index) {
     return 1;  /* Continue by default */
 }
 
-static int handle_menu_click(int mx, int my) {
+int handle_menu_click(int mx, int my) {
     /* Check if clicking menu bar */
     if (my < MENU_BAR_HEIGHT) {
         if (mx < MENU_ITEM_WIDTH) {
@@ -819,7 +819,7 @@ static int handle_menu_click(int mx, int my) {
     return 1;  /* Continue by default */
 }
 
-static bool handle_button_click(int mx, int my) {
+bool handle_button_click(int mx, int my) {
     for (int i = 0; i < NUM_BUTTONS; i++) {
         if (side_buttons[i].enabled && 
             point_in_rect(mx, my, side_buttons[i].x, side_buttons[i].y,
@@ -841,7 +841,7 @@ static bool handle_button_click(int mx, int my) {
     return true;
 }
 
-static void update_menu_selection(int my) {
+void update_menu_selection(int my) {
     /* Safety check input */
     if (my < 0 || my >= 480) {
         chess_gui.menu_selected = -1;
