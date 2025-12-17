@@ -23,7 +23,6 @@ typedef struct {
     GtkWidget *render_mode_item;  // Menu item for render mode
     
     ChessGameState game;
-    ChessThinkingState thinking_state;
     ChessGameStatus status;
     
     int selected_row;
@@ -231,6 +230,9 @@ void make_ai_move(ChessGUI *gui) {
         
         // Skip if move leaves king in check
         if (chess_is_in_check(&temp, gui->game.turn)) {
+            printf("  Move %d (%c%d->%c%d): ILLEGAL (leaves king in check)\n",
+                   i, 'a' + moves[i].from_col, 8 - moves[i].from_row,
+                   'a' + moves[i].to_col, 8 - moves[i].to_row);
             continue;
         }
         
@@ -240,24 +242,85 @@ void make_ai_move(ChessGUI *gui) {
         bool opponent_is_white = (temp.turn == WHITE);
         int score = chess_minimax(&temp, search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
         
+        printf("  Move %d (%c%d->%c%d): score=%d\n",
+               i, 'a' + moves[i].from_col, 8 - moves[i].from_row,
+               'a' + moves[i].to_col, 8 - moves[i].to_row, score);
+        
         // Update best move based on whether we're maximizing or minimizing
         if (we_are_white) {
             // White maximizes
             if (score > best_score) {
                 best_score = score;
                 best_move = moves[i];
+                printf("    -> New best move (White maximizing)\n");
             }
         } else {
             // Black minimizes
             if (score < best_score) {
                 best_score = score;
                 best_move = moves[i];
+                printf("    -> New best move (Black minimizing)\n");
             }
         }
     }
     
     // Make the best move found
     if (best_move.from_row >= 0 && best_move.from_col >= 0) {
+        // Collect all moves within 50 centipawns of the best score
+        typedef struct {
+            ChessMove move;
+            int score;
+        } ScoredMove;
+        
+        ScoredMove candidate_moves[256];
+        int candidate_count = 0;
+        int threshold = 50;  // 50 centipawns
+        
+        printf("BEST SCORE: %d, collecting candidates within %d centipawns\n", best_score, threshold);
+        
+        for (int i = 0; i < num_moves; i++) {
+            ChessGameState temp = gui->game;
+            chess_make_move(&temp, moves[i]);
+            
+            // Skip if move leaves king in check
+            if (chess_is_in_check(&temp, gui->game.turn)) {
+                continue;
+            }
+            
+            bool opponent_is_white = (temp.turn == WHITE);
+            int score = chess_minimax(&temp, search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
+            
+            // Check if this move is within threshold of best
+            bool is_close = false;
+            if (we_are_white) {
+                is_close = (score >= best_score - threshold);
+            } else {
+                is_close = (score <= best_score + threshold);
+            }
+            
+            if (is_close) {
+                candidate_moves[candidate_count].move = moves[i];
+                candidate_moves[candidate_count].score = score;
+                candidate_count++;
+                printf("  Candidate: %c%d->%c%d (score: %d)\n",
+                       'a' + moves[i].from_col, 8 - moves[i].from_row,
+                       'a' + moves[i].to_col, 8 - moves[i].to_row, score);
+            }
+        }
+        
+        // Randomly pick from candidates
+        if (candidate_count > 0) {
+            int choice = rand() % candidate_count;
+            best_move = candidate_moves[choice].move;
+            best_score = candidate_moves[choice].score;
+            printf("RANDOMLY SELECTED: Move %d of %d candidates\n", choice, candidate_count);
+        }
+        
+        printf("MAKE_AI_MOVE: Selected move %c%d->%c%d (score: %d)\n",
+               'a' + best_move.from_col, 8 - best_move.from_row,
+               'a' + best_move.to_col, 8 - best_move.to_row,
+               best_score);
+        
         gui->last_from_row = best_move.from_row;
         gui->last_from_col = best_move.from_col;
         gui->last_to_row = best_move.to_row;
@@ -266,16 +329,20 @@ void make_ai_move(ChessGUI *gui) {
         // Save position before making move
         save_position_to_history(gui);
         
+        printf("MAKE_AI_MOVE: Executing move from board[%d][%d] to board[%d][%d]\n",
+               best_move.from_row, best_move.from_col,
+               best_move.to_row, best_move.to_col);
         chess_make_move(&gui->game, best_move);
+        printf("MAKE_AI_MOVE: Move executed, piece now at board[%d][%d]\n",
+               best_move.to_row, best_move.to_col);
         gui->move_count++;
         
         gui->status = chess_check_game_status(&gui->game);
         
-        if (gui->status == CHESS_PLAYING && gui->move_count < MAX_MOVES_BEFORE_DRAW) {
-            // Start thinking for next move if game still going
-            chess_start_thinking(&gui->thinking_state, &gui->game);
-            gui->ai_think_time = 0;
-        }
+        // Game continues, no need to start thinking (we'll call make_ai_move again from timeout)
+    } else {
+        printf("MAKE_AI_MOVE: No valid best move found! (from_row=%d from_col=%d)\n",
+               best_move.from_row, best_move.from_col);
     }
     
     update_status_text(gui);
@@ -292,15 +359,6 @@ gboolean ai_move_timeout(gpointer data) {
         gui->move_count = 0;
         gui->last_from_row = -1;
         gui->ai_think_time = 0;
-        
-        // Only start thinking if it's AI's turn in new game
-        bool ai_should_think = (gui->player_is_white && gui->game.turn == BLACK) ||
-                               (!gui->player_is_white && gui->game.turn == WHITE) ||
-                               gui->zero_players;
-        if (ai_should_think) {
-            chess_start_thinking(&gui->thinking_state, &gui->game);
-        }
-        
         update_status_text(gui);
         gtk_widget_queue_draw(gui->drawing_area);
         return G_SOURCE_CONTINUE;
@@ -387,10 +445,6 @@ gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data
                 
                 gui->status = chess_check_game_status(&gui->game);
                 
-                if (gui->status == CHESS_PLAYING && gui->move_count < MAX_MOVES_BEFORE_DRAW) {
-                    chess_start_thinking(&gui->thinking_state, &gui->game);
-                }
-                
                 update_status_text(gui);
             } else {
                 gui->has_selection = false;
@@ -415,7 +469,6 @@ gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data
 void on_new_game(GtkWidget *widget, gpointer data) {
     ChessGUI *gui = (ChessGUI*)data;
     
-    chess_stop_thinking(&gui->thinking_state);
     chess_init_board(&gui->game);
     gui->status = CHESS_PLAYING;
     gui->move_count = 0;
@@ -427,7 +480,6 @@ void on_new_game(GtkWidget *widget, gpointer data) {
     gui->history_size = 0;
     save_position_to_history(gui);  // Save initial position
     
-    chess_start_thinking(&gui->thinking_state, &gui->game);
     update_status_text(gui);
     gtk_widget_queue_draw(gui->drawing_area);
 }
@@ -480,7 +532,6 @@ void on_undo_move(GtkWidget *widget, gpointer data) {
     }
     
     // Stop AI thinking
-    chess_stop_thinking(&gui->thinking_state);
     
     // Go back 2 moves: undo AI move and player move
     gui->history_size -= 2;
@@ -493,10 +544,6 @@ void on_undo_move(GtkWidget *widget, gpointer data) {
     gui->status = chess_check_game_status(&gui->game);
     
     // Restart AI thinking for AI's turn
-    if (gui->status == CHESS_PLAYING) {
-        chess_start_thinking(&gui->thinking_state, &gui->game);
-        gui->ai_think_time = 0;
-    }
     
     update_status_text(gui);
     gtk_widget_queue_draw(gui->drawing_area);
@@ -553,7 +600,6 @@ int main(int argc, char *argv[]) {
     
     // Initialize game
     chess_init_board(&gui.game);
-    chess_init_thinking_state(&gui.thinking_state);
     gui.status = CHESS_PLAYING;
     gui.move_count = 0;
     
@@ -562,14 +608,6 @@ int main(int argc, char *argv[]) {
     gui.history_capacity = 10;
     gui.history_size = 1;
     gui.move_history[0] = gui.game;  // Save initial position
-    
-    // Start AI thinking only if it's AI's turn
-    // (Don't think for player's turn at game start)
-    bool ai_should_think = (gui.player_is_white && gui.game.turn == BLACK) ||
-                           (!gui.player_is_white && gui.game.turn == WHITE);
-    if (ai_should_think) {
-        chess_start_thinking(&gui.thinking_state, &gui.game);
-    }
     
     // Create window
     gui.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);

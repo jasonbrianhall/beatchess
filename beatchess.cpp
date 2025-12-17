@@ -1119,58 +1119,65 @@ void* chess_think_continuously(void* arg) {
             pthread_mutex_lock(&ts->lock);
 #endif
             if (depth_completed && ts->thinking && best_move_count > 0) {
-                // ========== RANDOMNESS: Consider near-best moves ==========
-                // Collect all moves within a threshold of the best score
-                ChessMove candidate_moves[256];
-                int candidate_count = 0;
-                int threshold = 500;  // Consider moves within 50 centipawns of best
+                // Only update if we don't have a move yet, or if this is a significantly deeper search
+                // This prevents shallower moves from being overwritten by equally-good deeper moves
+                bool should_update = !ts->has_move || (depth > ts->current_depth);
                 
-                printf("\n\n");
-                for (int i = 0; i < move_count; i++) {
-                    ChessGameState temp = game_copy;
-                    chess_make_move(&temp, moves[i]);
-                    int score = chess_minimax(&temp, depth - 1, INT_MIN, INT_MAX, 
-                                             game_copy.turn == BLACK);
-                    bool is_close = false;
-                    if (game_copy.turn == WHITE) {
-                        is_close = (score >= best_score - threshold);
+                if (should_update) {
+                    // ========== RANDOMNESS: Consider near-best moves ==========
+                    // Collect all moves within a threshold of the best score
+                    ScoredMove candidate_moves[256];
+                    int candidate_count = 0;
+                    int threshold = 500;  // Consider moves within 50 centipawns of best
+                    
+                    printf("\n\nDEPTH %d UPDATE:\n", depth);
+                    // Use the already-calculated scores from the main loop (lines 1079-1115)
+                    // Don't recalculate - just look at which moves are near-best
+                    for (int i = 0; i < move_count; i++) {
+                        ChessGameState temp = game_copy;
+                        chess_make_move(&temp, moves[i]);
+                        int score = chess_minimax(&temp, depth - 1, INT_MIN, INT_MAX, 
+                                                 game_copy.turn == BLACK);
+                        bool is_close = false;
+                        if (game_copy.turn == WHITE) {
+                            is_close = (score >= best_score - threshold);
+                        } else {
+                            is_close = (score <= best_score + threshold);
+                        }
+                        
+                        if (is_close) {
+                            candidate_moves[candidate_count].move = moves[i];
+                            candidate_moves[candidate_count].score = score;
+                            candidate_count++;
+                        }
+                        printf("Scores %i, move_count %i i %i\n", score, move_count, i);
+                    }
+
+                    printf("Players turn is %s\n", (game_copy.turn == WHITE) ? "White" : "Black");
+                    printf("candidate count is %i best_move count is %i\n", candidate_count, best_move_count);
+
+                    // Randomly select from candidate moves
+                    // This gives higher-scoring moves more chances to be picked
+                    // but lower-scoring moves still have a chance
+                    if (candidate_count > 0) {
+                        printf("At 1\n");
+                        int choice = rand() % candidate_count;
+                        ts->best_move = candidate_moves[choice].move;
+                        printf("SELECTED: Picking candidate %i (score: %i) from_row=%d from_col=%d to_row=%d to_col=%d\n", 
+                               choice, candidate_moves[choice].score,
+                               candidate_moves[choice].move.from_row,
+                               candidate_moves[choice].move.from_col,
+                               candidate_moves[choice].move.to_row,
+                               candidate_moves[choice].move.to_col);
                     } else {
-                        is_close = (score <= best_score + threshold);
+                        printf("At 2\n");
+                        ts->best_move = best_moves[rand() % best_move_count];
                     }
                     
-                    if (is_close) {
-                        candidate_moves[candidate_count++] = moves[i];
-                    }
-                    printf("Scores %i, move_count %i i %i\n", score, move_count, i);
+                    ts->best_score = best_score;
+                    ts->current_depth = depth;
+                    ts->has_move = true;
                 }
-
-                printf("Players turn is %s\n", (game_copy.turn == WHITE) ? "White" : "Black");
-                printf("candidate count is %i best_move count is %i\n", candidate_count, best_move_count);
-
-                // Randomly select from candidate moves
-                // This gives higher-scoring moves more chances to be picked
-                // but lower-scoring moves still have a chance
-                if (candidate_count > 0) {
-                    printf("At 1\n");
-                    int choice=rand() % candidate_count;
-                    ts->best_move = candidate_moves[choice];
-                    printf("Picking %i\n", choice);
-                } else {
-                    printf("At 2\n");
-
-                    ts->best_move = best_moves[rand() % best_move_count];
-                }
-                
-                ts->best_score = best_score;
-                ts->current_depth = depth;
-                ts->has_move = true;
-                
-                // Debug output - print all best moves
-                //printf("THINK: Depth %d complete (score=%d, %s), found %d best move(s), %d candidates:\n", depth, best_score, game_copy.turn == WHITE ? "WHITE" : "BLACK", best_move_count, candidate_count);
-                for (int i = 0; i < best_move_count; i++) {
-                    //printf("       %c%d->%c%d", 'a' + best_moves[i].from_col, 8 - best_moves[i].from_row, 'a' + best_moves[i].to_col, 8 - best_moves[i].to_row);
-                          }
-                //printf("       Selected: %c%d->%c%d\n", 'a' + ts->best_move.from_col, 8 - ts->best_move.from_row, 'a' + ts->best_move.to_col, 8 - ts->best_move.to_row);
             }
 #if BEATCHESS_HAS_PTHREAD
             pthread_mutex_unlock(&ts->lock);
@@ -1222,13 +1229,21 @@ ChessMove chess_get_best_move_now(ChessThinkingState *ts) {
 #endif
     ChessMove move = ts->best_move;
     bool has_move = ts->has_move;
+    int depth = ts->current_depth;
     ts->thinking = false; // Stop thinking
 #if BEATCHESS_HAS_PTHREAD
     pthread_mutex_unlock(&ts->lock);
 #endif
     
+    printf("CHESS_GET_BEST_MOVE_NOW: has_move=%d depth=%d\n", has_move, depth);
+    if (has_move) {
+        printf("  Found move: from_row=%d from_col=%d to_row=%d to_col=%d\n",
+               move.from_row, move.from_col, move.to_row, move.to_col);
+    }
+    
     if (!has_move) {
         // No move found yet - pick random legal move as fallback
+        printf("  NO MOVE FOUND, USING RANDOM FALLBACK\n");
         ChessMove moves[256];
         int count = chess_get_all_moves(&ts->game, ts->game.turn, moves);
         if (count > 0) {
@@ -2054,6 +2069,9 @@ void update_beat_chess(void *vis_ptr, double dt) {
     
     // AUTO-PLAY: Check if we should play immediately
     bool should_auto_play = false;
+    printf("DEBUG AUTO-PLAY CHECK: auto_play_enabled=%d has_move=%d time_thinking=%.2f min_think_time=%.2f\n",
+           chess->auto_play_enabled, has_move, chess->time_thinking, chess->min_think_time);
+    
     if (chess->auto_play_enabled && has_move && 
         chess->time_thinking >= chess->min_think_time) {
         
@@ -2068,14 +2086,17 @@ void update_beat_chess(void *vis_ptr, double dt) {
         // In Player vs AI mode: don't autoplay if it's the player's turn
         if (chess->player_vs_ai && chess->game.turn == player_color_local) {
             should_auto_play = false;
+            printf("  -> Player's turn, no autoplay\n");
         }
         // Force move after 4 seconds regardless of depth/evaluation
         else if (chess->time_thinking >= 4.0) {
             should_auto_play = true;
+            printf("  -> 4 second timeout, autoplay!\n");
         }
         // Play if we've reached depth 3 or 4
         else if (current_depth >= 3) {
             should_auto_play = true;
+            printf("  -> Reached depth %d, autoplay!\n", current_depth);
         }
         // Or if we found a really good move (even at depth 2)
         else {
@@ -2083,10 +2104,18 @@ void update_beat_chess(void *vis_ptr, double dt) {
             int advantage = (chess->game.turn == WHITE) ? 
                            (best_score - eval_before) : (eval_before - best_score);
             
+            printf("  -> Depth %d, eval_before=%d best_score=%d advantage=%d threshold=%d\n",
+                   current_depth, eval_before, best_score, advantage, chess->good_move_threshold);
+            
             if (advantage > chess->good_move_threshold && current_depth >= 2) {
                 should_auto_play = true;
+                printf("  -> Good move found, autoplay!\n");
+            } else {
+                printf("  -> Not auto-playing yet\n");
             }
         }
+    } else {
+        printf("  -> Conditions not met for autoplay\n");
     }
     
     // Detect beat OR auto-play trigger
@@ -2105,16 +2134,25 @@ void update_beat_chess(void *vis_ptr, double dt) {
     }
     
     if (should_make_move) {
+        printf("\n\nTRIGGER MOVE EXECUTION: beat_detected=%d should_auto_play=%d\n", beat_detected, should_auto_play);
+        
         // Get current evaluation
         int eval_before = chess_evaluate_position(&chess->game);
         
         // Force move
         ChessMove forced_move = chess_get_best_move_now(&chess->thinking_state);
+        printf("DEBUG RETRIEVED: from_row=%d from_col=%d to_row=%d to_col=%d\n", 
+               forced_move.from_row, forced_move.from_col,
+               forced_move.to_row, forced_move.to_col);
+        printf("DEBUG: Selected move %c%d->%c%d\n", 
+               'a' + forced_move.from_col, 8 - forced_move.from_row,
+               'a' + forced_move.to_col, 8 - forced_move.to_row);
         
         // Validate move
         if (!chess_is_valid_move(&chess->game, 
                                  forced_move.from_row, forced_move.from_col,
                                  forced_move.to_row, forced_move.to_col)) {
+            printf("DEBUG: Move is INVALID!\n");
             chess_start_thinking(&chess->thinking_state, &chess->game);
             chess->time_thinking = 0;
             return;
@@ -2124,10 +2162,13 @@ void update_beat_chess(void *vis_ptr, double dt) {
         ChessGameState temp_game = chess->game;
         chess_make_move(&temp_game, forced_move);
         if (chess_is_in_check(&temp_game, chess->game.turn)) {
+            printf("DEBUG: Move leaves king in check!\n");
             chess_start_thinking(&chess->thinking_state, &chess->game);
             chess->time_thinking = 0;
             return;
         }
+        
+        printf("DEBUG: Move is VALID, executing...\n");
         
         // Get depth reached
 #if BEATCHESS_HAS_PTHREAD
@@ -2140,6 +2181,10 @@ void update_beat_chess(void *vis_ptr, double dt) {
         
         // Make the move
         ChessColor moving_color = chess->game.turn;
+        printf("EXECUTING MOVE: from=%c%d to=%c%d (depth reached: %d)\n",
+               'a' + forced_move.from_col, 8 - forced_move.from_row,
+               'a' + forced_move.to_col, 8 - forced_move.to_row,
+               depth_reached);
         chess_make_move(&chess->game, forced_move);
         
         // Track time and save move history (only in Player vs AI mode)
