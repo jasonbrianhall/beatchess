@@ -60,12 +60,6 @@ jobs:
         path: |
           beatchess-msdos.zip
 
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: beatchess-windows
-        path: release-artifacts/
-
   create-release:
     needs: [build-msdos]
     runs-on: ubuntu-latest
@@ -73,6 +67,8 @@ jobs:
       contents: write
     
     steps:
+    - uses: actions/checkout@v4
+    
     - name: Download MSDOS Artifact
       uses: actions/download-artifact@v4
       with:
