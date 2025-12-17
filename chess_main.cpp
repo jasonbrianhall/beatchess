@@ -71,6 +71,10 @@ extern void cleanup_sprite_cache();
 extern void set_rendering_mode(bool sprites);
 extern bool get_rendering_mode();
 
+// External chess engine functions
+extern int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing);
+extern int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves);
+
 gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     ChessGUI *gui = (ChessGUI*)data;
     
@@ -203,41 +207,75 @@ void update_status_text(ChessGUI *gui) {
 }
 
 void make_ai_move(ChessGUI *gui) {
-    // This stops thinking and gets whatever move has been found so far
-    ChessMove ai_move = chess_get_best_move_now(&gui->thinking_state);
+    ChessMove moves[256];
+    ChessMove best_move = {-1, -1, -1, -1, 0};
+    int num_moves = chess_get_all_moves(&gui->game, gui->game.turn, moves);
     
-    if (chess_is_valid_move(&gui->game, ai_move.from_row, ai_move.from_col,
-                            ai_move.to_row, ai_move.to_col)) {
+    if (num_moves == 0) {
+        gui->status = chess_check_game_status(&gui->game);
+        update_status_text(gui);
+        gtk_widget_queue_draw(gui->drawing_area);
+        return;
+    }
+    
+    // Determine if current player is white or black
+    // White maximizes (wants positive scores)
+    // Black minimizes (wants negative scores)
+    bool we_are_white = (gui->game.turn == WHITE);
+    int best_score = we_are_white ? INT_MIN : INT_MAX;
+    int search_depth = 3;
+    
+    for (int i = 0; i < num_moves; i++) {
         ChessGameState temp = gui->game;
-        chess_make_move(&temp, ai_move);
+        chess_make_move(&temp, moves[i]);
         
-        if (!chess_is_in_check(&temp, gui->game.turn)) {
-            gui->last_from_row = ai_move.from_row;
-            gui->last_from_col = ai_move.from_col;
-            gui->last_to_row = ai_move.to_row;
-            gui->last_to_col = ai_move.to_col;
-            
-            // Save position before making move
-            save_position_to_history(gui);
-            
-            chess_make_move(&gui->game, ai_move);
-            gui->move_count++;
-            
-            gui->status = chess_check_game_status(&gui->game);
-            
-            if (gui->status == CHESS_PLAYING && gui->move_count < MAX_MOVES_BEFORE_DRAW) {
-                chess_start_thinking(&gui->thinking_state, &gui->game);
-                gui->ai_think_time = 0;  // Reset think timer
+        // Skip if move leaves king in check
+        if (chess_is_in_check(&temp, gui->game.turn)) {
+            continue;
+        }
+        
+        // Call minimax with opponent's perspective
+        // If we're white (maximizing), opponent will be black (minimizing)
+        // If we're black (minimizing), opponent will be white (maximizing)
+        bool opponent_is_white = (temp.turn == WHITE);
+        int score = chess_minimax(&temp, search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
+        
+        // Update best move based on whether we're maximizing or minimizing
+        if (we_are_white) {
+            // White maximizes
+            if (score > best_score) {
+                best_score = score;
+                best_move = moves[i];
             }
         } else {
-            // Move was invalid - restart thinking
+            // Black minimizes
+            if (score < best_score) {
+                best_score = score;
+                best_move = moves[i];
+            }
+        }
+    }
+    
+    // Make the best move found
+    if (best_move.from_row >= 0 && best_move.from_col >= 0) {
+        gui->last_from_row = best_move.from_row;
+        gui->last_from_col = best_move.from_col;
+        gui->last_to_row = best_move.to_row;
+        gui->last_to_col = best_move.to_col;
+        
+        // Save position before making move
+        save_position_to_history(gui);
+        
+        chess_make_move(&gui->game, best_move);
+        gui->move_count++;
+        
+        gui->status = chess_check_game_status(&gui->game);
+        
+        if (gui->status == CHESS_PLAYING && gui->move_count < MAX_MOVES_BEFORE_DRAW) {
+            // Start thinking for next move if game still going
             chess_start_thinking(&gui->thinking_state, &gui->game);
             gui->ai_think_time = 0;
         }
-    } else {
-        // Move was invalid - restart thinking  
-        chess_start_thinking(&gui->thinking_state, &gui->game);
-        gui->ai_think_time = 0;
     }
     
     update_status_text(gui);
