@@ -208,7 +208,6 @@ void cleanup_chess_game() {
 }
 
 void init_chess_game() {
-    /* CRITICAL: Don't allow new game while AI is computing - this causes crashes! */
     if (chess_gui.ai_computing) {
         return;
     }
@@ -378,51 +377,51 @@ void undo_move() {
 
     /* Don't allow undo while AI is computing */
     if (chess_gui.ai_computing) { 
-        printToSerial("AI computing, abort undo\n");
+        //printToSerial("AI computing, abort undo\n");
         return;
     }
     
     /* Safety check - make sure we have history initialized */
     if (!chess_gui.history || !chess_gui.move_history || chess_gui.history_capacity <= 0) {
-        printToSerial("exit 1: history not initialized\n");
+        //printToSerial("exit 1: history not initialized\n");
         return;
     }
     
     /* Can't undo if we only have the initial position (need at least 2 positions) */
     if (chess_gui.history_size < 2) {
-        printToSerial("exit 2: not enough history\n");
+        //printToSerial("exit 2: not enough history\n");
         return;
     }
     
     /* Determine how many moves to undo */
     int moves_to_undo = chess_gui.ai_vs_ai ? 1 : 2;
-    printToSerial("moves_to_undo = %d\n", moves_to_undo);
+    //printToSerial("moves_to_undo = %d\n", moves_to_undo);
     
     /* Don't undo more moves than we have (must keep initial position at index 0) */
     if (chess_gui.history_size - moves_to_undo < 1) {
         moves_to_undo = chess_gui.history_size - 1;
-        printToSerial("adjusted moves_to_undo = %d\n", moves_to_undo);
+        //printToSerial("adjusted moves_to_undo = %d\n", moves_to_undo);
     }
     
     /* Safety check: can't undo if we'd go past the beginning */
     if (moves_to_undo <= 0) {
-        printToSerial("exit 3: moves_to_undo <= 0\n");
+        //printToSerial("exit 3: moves_to_undo <= 0\n");
         return;
     }
     
     /* CRITICAL: Calculate indices BEFORE modifying history_size */
     int restore_index = chess_gui.history_size - moves_to_undo - 1;
     int last_move_index = restore_index;
-    printToSerial("restore_index = %d, last_move_index = %d\n", restore_index, last_move_index);
+    //printToSerial("restore_index = %d, last_move_index = %d\n", restore_index, last_move_index);
     
     /* Validate restore_index with full bounds checking */
     if (restore_index < 0) {
-        printToSerial("restore_index < 0, resetting\n");
+        //printToSerial("restore_index < 0, resetting\n");
         restore_index = 0;
         last_move_index = -1;
     }
     if (restore_index >= chess_gui.history_capacity) {
-        printToSerial("restore_index >= capacity, resetting\n");
+        //printToSerial("restore_index >= capacity, resetting\n");
         chess_gui.history_size = 1;
         restore_index = 0;
         last_move_index = -1;
@@ -430,11 +429,11 @@ void undo_move() {
     
     /* Now it's safe to update history_size */
     chess_gui.history_size -= moves_to_undo;
-    printToSerial("new history_size = %d\n", chess_gui.history_size);
+    //printToSerial("new history_size = %d\n", chess_gui.history_size);
     
     /* Extra safety: ensure we didn't underflow */
     if (chess_gui.history_size < 1) {
-        printToSerial("history_size underflow, resetting\n");
+        //printToSerial("history_size underflow, resetting\n");
         chess_gui.history_size = 1;
         restore_index = 0;
         last_move_index = -1;
@@ -442,10 +441,10 @@ void undo_move() {
     
     /* Restore game state from the valid restore_index */
     if (restore_index >= 0 && restore_index < chess_gui.history_capacity) {
-        printToSerial("Restoring game state from index %d\n", restore_index);
+        //printToSerial("Restoring game state from index %d\n", restore_index);
         chess_gui.game = chess_gui.history[restore_index];
     } else {
-        printToSerial("Invalid restore_index, reinitializing board\n");
+        //printToSerial("Invalid restore_index, reinitializing board\n");
         chess_init_board(&chess_gui.game);
         last_move_index = -1;
     }
@@ -457,11 +456,11 @@ void undo_move() {
     /* Restore the last move display */
     if (last_move_index > 0 && last_move_index < chess_gui.history_capacity) {
         int previous_move_index = last_move_index - 1;
-        printToSerial("last_move_index = %d, previous_move_index = %d\n", last_move_index, previous_move_index);
+        //printToSerial("last_move_index = %d, previous_move_index = %d\n", last_move_index, previous_move_index);
         if (previous_move_index >= 0 && previous_move_index < chess_gui.history_capacity) {
             ChessMove prev_move = chess_gui.move_history[previous_move_index].move;
             if (prev_move.from_row >= 0) {
-                printToSerial("Restoring last move display\n");
+                //printToSerial("Restoring last move display\n");
                 chess_gui.last_move_from_row = prev_move.from_row;
                 chess_gui.last_move_from_col = prev_move.from_col;
                 chess_gui.last_move_to_row = prev_move.to_row;
@@ -472,16 +471,16 @@ void undo_move() {
                 chess_gui.has_last_move = false;
             }
         } else {
-            printToSerial("previous_move_index out of bounds\n");
+            //printToSerial("previous_move_index out of bounds\n");
             chess_gui.has_last_move = false;
         }
     } else {
-        printToSerial("No last move to show\n");
+        //printToSerial("No last move to show\n");
         chess_gui.has_last_move = false;
     }
     
     /* Clear piece selection after undo */
-    printToSerial("Clearing piece selection\n");
+    //printToSerial("Clearing piece selection\n");
     chess_gui.piece_selected = false;
     chess_gui.piece_selected_row = -1;
     chess_gui.piece_selected_col = -1;
@@ -489,7 +488,7 @@ void undo_move() {
     chess_gui.selected_col = -1;
     
     /* Clear AI state */
-    printToSerial("Resetting AI state\n");
+    //printToSerial("Resetting AI state\n");
     chess_gui.ai_thinking = false;
     chess_gui.ai_computing = false;
     chess_gui.ai_move_counter = 0;
