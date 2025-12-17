@@ -28,121 +28,121 @@ CFLAGS = -O3 -march=i586 -fomit-frame-pointer -ffast-math -funroll-loops -fpermi
 all: dos
 
 help:
-    @echo "BeatChess DOS Makefile (no Docker)"
-    @echo "Targets:"
-    @echo "  make dos          - Build for DOS (full build)"
-    @echo "  make setup        - Setup DJGPP environment and CSDPMI"
-    @echo "  make allegro      - Build Allegro 4 library"
-    @echo "  make compile      - Quick compile (assumes Allegro is built)"
-    @echo "  make run          - Run in DOSBox"
-    @echo "  make clean        - Clean all build files"
-    @echo "  make clean-obj    - Clean only object files"
+	@echo "BeatChess DOS Makefile (no Docker)"
+	@echo "Targets:"
+	@echo "  make dos          - Build for DOS (full build)"
+	@echo "  make setup        - Setup DJGPP environment and CSDPMI"
+	@echo "  make allegro      - Build Allegro 4 library"
+	@echo "  make compile      - Quick compile (assumes Allegro is built)"
+	@echo "  make run          - Run in DOSBox"
+	@echo "  make clean        - Clean all build files"
+	@echo "  make clean-obj    - Clean only object files"
 
 # Setup DJGPP environment
 setup: get-csdpmi
-    @echo "Setup complete"
+	@echo "Setup complete"
 
 # Download and extract CSDPMI
 get-csdpmi:
-    @if [ ! -d "$(CSDPMI_DIR)" ]; then \
-        echo "Downloading CSDPMI..."; \
-        mkdir -p $(BUILD_DIR); \
-        cd $(BUILD_DIR) && \
-        curl -L -o csdpmi7b.zip $(CSDPMI_URL) && \
-        unzip -o -q csdpmi7b.zip -d csdpmi && \
-        rm csdpmi7b.zip && \
-        cd ../..; \
-    else \
-        echo "CSDPMI already downloaded"; \
-    fi
+	@if [ ! -d "$(CSDPMI_DIR)" ]; then \
+	echo "Downloading CSDPMI..."; \
+	mkdir -p $(BUILD_DIR); \
+	cd $(BUILD_DIR) && \
+	curl -L -o csdpmi7b.zip $(CSDPMI_URL) && \
+	unzip -o -q csdpmi7b.zip -d csdpmi && \
+	rm csdpmi7b.zip && \
+	cd ../..; \
+	else \
+		echo "CSDPMI already downloaded"; \
+	fi
 
 # Build Allegro 4 library
 allegro: get-csdpmi
-    @if [ ! -d "$(ALLEGRO_BUILD)" ]; then \
-        echo "Building Allegro 4 for DJGPP..."; \
-        mkdir -p $(BUILD_DIR); \
-        cd $(BUILD_DIR) && \
-        curl -L -o allegro-4.2.3.1-xc.tar.gz $(ALLEGRO_URL) && \
-        tar xzf allegro-4.2.3.1-xc.tar.gz && \
-        cd allegro-4.2.3.1-xc-master && \
-        chmod +x xmake.sh && \
-        ./xmake.sh lib && \
-        mkdir -p ../source-install/include && \
-        mkdir -p ../source-install/lib && \
-        cp -r include/* ../source-install/include/ && \
-        cp lib/djgpp/liballeg.a ../source-install/lib/ && \
-        echo 'Allegro 4 built successfully'; \
-        cd ../..; \
-    else \
-        echo "Allegro 4 already built"; \
-    fi
+	@if [ ! -d "$(ALLEGRO_BUILD)" ]; then \
+	echo "Building Allegro 4 for DJGPP..."; \
+	mkdir -p $(BUILD_DIR); \
+	cd $(BUILD_DIR) && \
+	curl -L -o allegro-4.2.3.1-xc.tar.gz $(ALLEGRO_URL) && \
+	tar xzf allegro-4.2.3.1-xc.tar.gz && \
+	cd allegro-4.2.3.1-xc-master && \
+	chmod +x xmake.sh && \
+	./xmake.sh lib && \
+	mkdir -p ../source-install/include && \
+	mkdir -p ../source-install/lib && \
+	cp -r include/* ../source-install/include/ && \
+	cp lib/djgpp/liballeg.a ../source-install/lib/ && \
+	echo 'Allegro 4 built successfully'; \
+	cd ../..; \
+	else \
+	    echo "Allegro 4 already built"; \
+	fi
 
 # Quick compile (assumes Allegro is already built)
 compile: allegro
-    @echo "Compiling BeatChess with DJGPP and Allegro 4..."
-    @mkdir -p $(OBJ_DIR)
-    @g++ -c beatchess.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/beatchess.o
-    @g++ -c beatchess_dos.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/dos_main.o
-    @g++ $(OBJ_DIR)/*.o -L$(BUILD_DIR)/source-install/lib -lalleg -lm $(CFLAGS) -s -o $(BUILD_DIR)/beatchess
-    @echo "Converting to COFF format..."
-    @exe2coff $(BUILD_DIR)/beatchess
-    @echo "Adding DPMI stub..."
-    @cat $(CSDPMI_DIR)/bin/CWSDSTUB.EXE $(BUILD_DIR)/beatchess > $(BUILD_DIR)/$(DOS_TARGET)
-    @rm $(BUILD_DIR)/beatchess
-    @echo "✅ Build successful!"
-    @echo "📁 Output: $(BUILD_DIR)/$(DOS_TARGET)"
+	@echo "Compiling BeatChess with DJGPP and Allegro 4..."
+	@mkdir -p $(OBJ_DIR)
+	@g++ -c beatchess.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/beatchess.o
+	@g++ -c beatchess_dos.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/dos_main.o
+	@g++ $(OBJ_DIR)/*.o -L$(BUILD_DIR)/source-install/lib -lalleg -lm $(CFLAGS) -s -o $(BUILD_DIR)/beatchess
+	@echo "Converting to COFF format..."
+	@exe2coff $(BUILD_DIR)/beatchess
+	@echo "Adding DPMI stub..."
+	@cat $(CSDPMI_DIR)/bin/CWSDSTUB.EXE $(BUILD_DIR)/beatchess > $(BUILD_DIR)/$(DOS_TARGET)
+	@rm $(BUILD_DIR)/beatchess
+	@echo "✅ Build successful!"
+	@echo "📁 Output: $(BUILD_DIR)/$(DOS_TARGET)"
 
 dos: compile
 
 run: dos
-    @echo "Running BeatChess in DOSBox..."
-    @if [ -f "$(BUILD_DIR)/$(DOS_TARGET)" ]; then \
-        if command -v dosbox >/dev/null 2>&1; then \
-            cd $(BUILD_DIR) && dosbox $(DOS_TARGET); \
-        else \
-            echo "DOSBox not found. Install with: sudo apt-get install dosbox"; \
-            echo "Download from: https://www.dosbox.com/"; \
-            exit 1; \
-        fi \
-    else \
-        echo "ERROR: $(BUILD_DIR)/$(DOS_TARGET) not found. Build first with: make dos"; \
-        exit 1; \
-    fi
+	@echo "Running BeatChess in DOSBox..."
+	@if [ -f "$(BUILD_DIR)/$(DOS_TARGET)" ]; then \
+	if command -v dosbox >/dev/null 2>&1; then \
+	    cd $(BUILD_DIR) && dosbox $(DOS_TARGET); \
+	else \
+	    echo "DOSBox not found. Install with: sudo apt-get install dosbox"; \
+	    echo "Download from: https://www.dosbox.com/"; \
+	    exit 1; \
+	fi \
+	else \
+	echo "ERROR: $(BUILD_DIR)/$(DOS_TARGET) not found. Build first with: make dos"; \
+	exit 1; \
+	fi
 
 clean:
-    @echo "Cleaning build files..."
-    @rm -rf $(BUILD_DIR)
-    @rm -f $(DOS_TARGET)
-    @echo "✅ Clean complete"
+	@echo "Cleaning build files..."
+	@rm -rf $(BUILD_DIR)
+	@rm -f $(DOS_TARGET)
+	@echo "✅ Clean complete"
 
 clean-obj:
-    @echo "Cleaning object files..."
-    @rm -rf $(OBJ_DIR)
-    @echo "✅ Object files cleaned"
+	@echo "Cleaning object files..."
+	@rm -rf $(OBJ_DIR)
+	@echo "✅ Object files cleaned"
 
 clean-allegro:
-    @echo "Cleaning Allegro build..."
-    @rm -rf $(ALLEGRO_BUILD)
-    @echo "✅ Allegro cleaned"
+	@echo "Cleaning Allegro build..."
+	@rm -rf $(ALLEGRO_BUILD)
+	@echo "✅ Allegro cleaned"
 
 status:
-    @echo "Build Status:"
-    @echo "============"
-    @if [ -d "$(CSDPMI_DIR)" ]; then \
-        echo "✅ CSDPMI: Downloaded"; \
-    else \
-        echo "❌ CSDPMI: Not downloaded"; \
-    fi
-    @if [ -d "$(ALLEGRO_BUILD)" ]; then \
-        echo "✅ Allegro 4: Built"; \
-    else \
-        echo "❌ Allegro 4: Not built"; \
-    fi
-    @if [ -f "$(BUILD_DIR)/$(DOS_TARGET)" ]; then \
-        echo "✅ Executable: $(BUILD_DIR)/$(DOS_TARGET) ($(shell ls -lh $(BUILD_DIR)/$(DOS_TARGET) 2>/dev/null | awk '{print $$5}'))"; \
-    else \
-        echo "❌ Executable: Not built"; \
-    fi
+	@echo "Build Status:"
+	@echo "============"
+	@if [ -d "$(CSDPMI_DIR)" ]; then \
+	echo "✅ CSDPMI: Downloaded"; \
+	else \
+	echo "❌ CSDPMI: Not downloaded"; \
+	fi
+	@if [ -d "$(ALLEGRO_BUILD)" ]; then \
+	echo "✅ Allegro 4: Built"; \
+	else \
+	echo "❌ Allegro 4: Not built"; \
+	fi
+	@if [ -f "$(BUILD_DIR)/$(DOS_TARGET)" ]; then \
+	echo "✅ Executable: $(BUILD_DIR)/$(DOS_TARGET) ($(shell ls -lh $(BUILD_DIR)/$(DOS_TARGET) 2>/dev/null | awk '{print $$5}'))"; \
+	else \
+	echo "❌ Executable: Not built"; \
+	fi
 
 .PHONY: all help setup get-csdpmi allegro compile dos run clean clean-obj clean-allegro status
 
