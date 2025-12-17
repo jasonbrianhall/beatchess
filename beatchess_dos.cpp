@@ -23,6 +23,8 @@ extern int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove
 extern int chess_evaluate_position(ChessGameState *game);
 extern bool chess_is_in_check(ChessGameState *game, ChessColor color);
 extern int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing);
+void save_position_to_history();
+void undo_move();
 
 /* ============================================================================
  * Circular Buffer History Helpers
@@ -69,11 +71,27 @@ static inline int get_circular_index(int position, int history_count,
  */
 static ChessGameState get_history_at_position(int position) {
     ChessGameState result;
-    memset(&result, 0, sizeof(ChessGameState));
     
-    // Validate history buffer is initialized before access
+    /* Clear result by zeroing out board and flags */
+    for (int i = 0; i < BOARD_SIZE; i++) {
+        for (int j = 0; j < BOARD_SIZE; j++) {
+            result.board[i][j].type = EMPTY;
+            result.board[i][j].color = NONE;
+        }
+    }
+    result.turn = NONE;
+    result.en_passant_col = -1;
+    result.en_passant_row = -1;
+    result.white_king_moved = false;
+    result.black_king_moved = false;
+    result.white_rook_a_moved = false;
+    result.white_rook_h_moved = false;
+    result.black_rook_a_moved = false;
+    result.black_rook_h_moved = false;
+    
+    /* Validate history buffer is initialized before access */
     if (!chess_gui.history || chess_gui.history_capacity <= 0) {
-        return result;  // Return empty state if history not initialized
+        return result;  /* Return empty state if history not initialized */
     }
     
     int actual_idx = get_circular_index(position, chess_gui.history_size, 
@@ -225,9 +243,15 @@ void cleanup_chess_game() {
         free(chess_gui.history);
         chess_gui.history = NULL;
     }
+    if (chess_gui.move_history) {
+        free(chess_gui.move_history);
+        chess_gui.move_history = NULL;
+    }
     chess_gui.history_size = 0;
     chess_gui.history_capacity = 0;
     chess_gui.history_start = 0;  /* Reset circular buffer state */
+    chess_gui.move_history_count = 0;
+    chess_gui.move_history_index = 0;
 }
 
 void init_chess_game() {
@@ -300,21 +324,40 @@ void init_chess_game() {
     
     /* Allocate history ONLY if it doesn't exist (first time only) */
     if (!chess_gui.history) {
-        chess_gui.history_capacity = 100;
+        chess_gui.history_capacity = 256;  /* Increased to match GTK version */
         chess_gui.history = (ChessGameState *)malloc(sizeof(ChessGameState) * chess_gui.history_capacity);
-        if (!chess_gui.history) {
-            printf("ERROR: Failed to allocate history buffer\n");
+        chess_gui.move_history = (MoveHistory *)malloc(sizeof(MoveHistory) * chess_gui.history_capacity);
+        if (!chess_gui.history || !chess_gui.move_history) {
+            printf("ERROR: Failed to allocate history buffers\n");
             exit(1);
         }
     }
     
+    /* Clear the entire history buffer to prevent stale data from old games */
+    for (int i = 0; i < chess_gui.history_capacity; i++) {
+        chess_gui.history[i].board[0][0].type = EMPTY;
+        chess_gui.history[i].board[0][0].color = NONE;
+        chess_gui.history[i].turn = NONE;
+        chess_gui.move_history[i].game_state.board[0][0].type = EMPTY;
+        chess_gui.move_history[i].game_state.board[0][0].color = NONE;
+        chess_gui.move_history[i].time_elapsed = 0;
+    }
+    
     /* Reset circular buffer state (reuse existing buffer) */
     chess_gui.history_size = 0;
-    chess_gui.history_start = 0;  /* CRITICAL: Reset circular buffer position */
+    chess_gui.history_start = 0;
+    chess_gui.move_history_count = 0;
+    chess_gui.move_history_index = 0;
+    chess_gui.move_count = 0;
     
-    /* Save initial position */
-    chess_gui.history[0] = chess_gui.game;
-    chess_gui.history_size = 1;
+    /* Initialize timing */
+    chess_gui.white_total_time = 0;
+    chess_gui.black_total_time = 0;
+    chess_gui.current_move_start_time = 0;
+    chess_gui.last_move_end_time = 0;
+    
+    /* Save initial position through normal save function */
+    save_position_to_history();
 }
 
 /**
@@ -323,33 +366,44 @@ void init_chess_game() {
  */
 void save_position_to_history() {
     /* Safety check - make sure we have history buffer */
-    if (!chess_gui.history) {
+    if (!chess_gui.history || !chess_gui.move_history) {
         return;
     }
     
     /* If buffer is not yet full, just append */
     if (chess_gui.history_size < chess_gui.history_capacity) {
+        /* Store at current write position */
         chess_gui.history[chess_gui.history_size] = chess_gui.game;
-        chess_gui.history_size++;
-    } else {
-        /* Buffer is full - use circular buffer logic */
-        /* Overwrite the oldest move */
-        int write_idx = chess_gui.history_start % chess_gui.history_capacity;
-        chess_gui.history[write_idx] = chess_gui.game;
+        chess_gui.move_history[chess_gui.history_size].game_state = chess_gui.game;
+        chess_gui.move_history[chess_gui.history_size].time_elapsed = 0;
         
-        /* Advance the start pointer (oldest move gets overwritten next time) */
-        chess_gui.history_start = (chess_gui.history_start + 1) % chess_gui.history_capacity;
-        /* Note: history_size stays at capacity since buffer is full */
+        /* Increment all counters together - keep them in sync */
+        chess_gui.history_size++;
+        chess_gui.move_history_count = chess_gui.history_size;
+        chess_gui.move_history_index = chess_gui.history_size;
+        chess_gui.move_count = chess_gui.history_size;
+    } else {
+        /* Buffer is full - wrap around to oldest position */
+        int write_idx = chess_gui.move_history_index % chess_gui.history_capacity;
+        chess_gui.history[write_idx] = chess_gui.game;
+        chess_gui.move_history[write_idx].game_state = chess_gui.game;
+        chess_gui.move_history[write_idx].time_elapsed = 0;
+        
+        /* Move write pointer to next position */
+        chess_gui.move_history_index = (write_idx + 1) % chess_gui.history_capacity;
+        /* history_size stays at capacity, move_history_count conceptually keeps incrementing */
+        chess_gui.move_history_count++;
+        chess_gui.move_count = chess_gui.history_size;
     }
     
-    /* Start timer after white's first move (move 2 in history = after first move) */
+    /* Start timer after first move is saved (when we have 2+ positions) */
     if (chess_gui.history_size == 2) {
         chess_gui.timer_started = true;
     }
 }
 
 /**
- * Undo the last move(s) using circular buffer history
+ * Undo the last move(s).
  * In Player vs AI mode, undoes TWO moves (player's move + AI's response)
  * In AI vs AI mode, undoes ONE move
  */
@@ -359,33 +413,96 @@ void undo_move() {
         return;
     }
     
-    /* In Player vs AI mode, undo TWO moves (AI's move + player's move) 
-     * so the player gets their turn back */
+    /* Safety check - make sure we have history initialized */
+    if (!chess_gui.history || !chess_gui.move_history || chess_gui.history_capacity <= 0) {
+        return;
+    }
+    
+    /* Can't undo if we only have the initial position (need at least 2 positions) */
+    if (chess_gui.history_size < 2) {
+        return;
+    }
+    
+    /* In Player vs AI mode, undo TWO moves (player's move + AI's response)
+     * so the player gets their turn back. In AI vs AI mode, just undo one. */
     int moves_to_undo = chess_gui.ai_vs_ai ? 1 : 2;
     
-    /* Safety check - make sure we have history */
-    if (!chess_gui.history || chess_gui.history_size <= 1) {
-        return;  /* Can't undo if no history */
+    /* Calculate how many valid positions we actually have in the buffer */
+    int valid_positions = (chess_gui.history_size <= chess_gui.history_capacity) 
+        ? chess_gui.history_size 
+        : chess_gui.history_capacity;
+    
+    /* Don't undo more moves than we have (must keep initial position) */
+    if (valid_positions - moves_to_undo < 1) {
+        moves_to_undo = valid_positions - 1;
     }
     
+    /* Safety check: can't undo if we'd go past the beginning */
+    if (moves_to_undo <= 0) {
+        return;
+    }
+    
+    /* When buffer is not full, move_history_index already points past the last saved position
+     * When buffer is full, move_history_index points to the next write position (circular)
+     * In both cases, the current position is one step back from move_history_index
+     */
+    int current_idx = (chess_gui.move_history_index - 1 + chess_gui.history_capacity) 
+                     % chess_gui.history_capacity;
+    
+    /* Verify we're undoing consecutive moves from this game session
+     * Each move should be exactly 1 position after the previous in the circular buffer */
+    int temp_idx = current_idx;
     for (int i = 0; i < moves_to_undo; i++) {
-        if (chess_gui.history_size > 1) {
-            chess_gui.history_size--;
-            
-            /* Use circular buffer to find the position to restore */
-            int target_position = chess_gui.history_size - 1;
-            int actual_idx = get_circular_index(target_position, chess_gui.history_size,
-                                                chess_gui.history_start, chess_gui.history_capacity);
-            
-            if (actual_idx >= 0 && actual_idx < chess_gui.history_capacity) {
-                chess_gui.game = chess_gui.history[actual_idx];
-            }
-        } else {
-            break;  /* Can't undo past the start */
-        }
+        /* Move back one position */
+        temp_idx = (temp_idx - 1 + chess_gui.history_capacity) % chess_gui.history_capacity;
+        /* Ensure we haven't wrapped past the initial position
+         * If we go back moves_to_undo positions from current and still in valid range, we're good */
     }
     
+    /* Go back moves_to_undo positions from current, with proper wrapping */
+    int restore_idx = (current_idx - moves_to_undo + 
+                      (chess_gui.history_capacity * 100)) % chess_gui.history_capacity;
+    
+    /* Restore the game state */
+    chess_gui.game = chess_gui.history[restore_idx];
+    
+    /* Update history tracking variables */
+    if (chess_gui.history_size <= chess_gui.history_capacity) {
+        /* Not wrapped yet - just decrement size */
+        chess_gui.history_size -= moves_to_undo;
+        chess_gui.move_history_count = chess_gui.history_size;
+        chess_gui.move_history_index = chess_gui.history_size;
+    } else {
+        /* Buffer is wrapped - move_history_index back to restore_idx + 1 */
+        chess_gui.move_history_index = (restore_idx + 1) % chess_gui.history_capacity;
+        chess_gui.move_history_count -= moves_to_undo;
+    }
+    
+    chess_gui.move_count = (chess_gui.history_size <= chess_gui.history_capacity) 
+        ? chess_gui.history_size 
+        : chess_gui.history_capacity;
+    
+    /* Clear piece selection after undo */
     chess_gui.piece_selected = false;
+    chess_gui.piece_selected_row = -1;
+    chess_gui.piece_selected_col = -1;
+    chess_gui.selected_row = -1;
+    chess_gui.selected_col = -1;
+    
+    /* Clear AI state - reset thinking so AI can move again if needed */
+    chess_gui.ai_thinking = false;
+    chess_gui.ai_computing = false;
+    chess_gui.ai_move_counter = 0;
+    chess_gui.ai_best_move.from_row = -1;
+    chess_gui.ai_best_move.from_col = -1;
+    chess_gui.ai_best_move.to_row = -1;
+    chess_gui.ai_best_move.to_col = -1;
+    
+    /* Clear status flags - they will be recalculated in the main loop */
+    chess_gui.is_checkmate = false;
+    chess_gui.is_stalemate = false;
+    chess_gui.is_in_check = false;
+    chess_gui.check_display_timer = 0;
 }
 
 /* Global counter for making AI computation interruptible */

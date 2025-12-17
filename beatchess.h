@@ -233,6 +233,7 @@ typedef struct {
     
     /* History - dynamic allocation with circular buffer support */
     ChessGameState *history;
+    MoveHistory *move_history;     /* Use MoveHistory like GTK version for timing info */
     int history_size;           /* Number of moves currently in buffer (0 to capacity) */
     int history_capacity;       /* Maximum buffer size */
     int history_start;          /* Index of oldest move (for circular buffer) */
@@ -268,6 +269,17 @@ typedef struct {
     double check_display_timer;    /* Display "CHECK" for 1 second (0 = not displayed) */
     bool is_checkmate;             /* True if game is in checkmate */
     bool is_stalemate;             /* True if game is in stalemate */
+    
+    /* Move history with timing information */
+    int move_count;                /* Total number of moves made (for display: "Move: N") */
+    int move_history_count;        /* Count of moves in history (for circular buffer) */
+    int move_history_index;        /* Current write position in circular buffer */
+    
+    /* Time tracking per move */
+    double white_total_time;       /* Cumulative time for White */
+    double black_total_time;       /* Cumulative time for Black */
+    double current_move_start_time; /* When current move phase started */
+    double last_move_end_time;     /* When the last move was completed */
     
 } ChessGUI;
 
