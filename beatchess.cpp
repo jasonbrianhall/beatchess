@@ -15,6 +15,25 @@
 // CORE CHESS ENGINE
 // ============================================================================
 
+#ifndef MAX_DEPTH
+#define MAX_DEPTH 10
+#endif
+
+#define MAX_KILLERS_PER_DEPTH 2
+typedef struct {
+    ChessMove killer_moves[MAX_DEPTH][MAX_KILLERS_PER_DEPTH];
+    int killer_count[MAX_DEPTH];
+} KillerMoveTable;
+
+typedef struct {
+    int history[8][8][8][8];  // [from_row][from_col][to_row][to_col]
+} HistoryHeuristic;
+
+typedef struct {
+    ChessMove move;
+    int score;
+} ScoredMove;
+
 bool chess_is_in_bounds(int r, int c) {
     return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
 }
@@ -524,42 +543,283 @@ int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves
     return count;
 }
 
+int chess_quick_eval_move(ChessGameState *game, ChessMove move, bool maximizing) {
+    int score = 0;
+    
+    // Most valuable victim / Least valuable attacker heuristic (MVV-LVA)
+    int piece_values[] = {0, 100, 320, 330, 500, 900, 20000};
+    
+    ChessPiece attacking_piece = game->board[move.from_row][move.from_col];
+    ChessPiece target_piece = game->board[move.to_row][move.to_col];
+    
+    // Captures: prioritize valuable targets attacked with cheap pieces
+    if (target_piece.type != EMPTY) {
+        score = (piece_values[target_piece.type] * 10) - piece_values[attacking_piece.type];
+    }
+    
+    // Check moves: high priority
+    ChessGameState temp = *game;
+    chess_make_move(&temp, move);
+    if (chess_is_in_check(&temp, game->turn == WHITE ? BLACK : WHITE)) {
+        score += 500;
+    }
+    
+    // Pawn promotion: extremely high priority
+    if (attacking_piece.type == PAWN) {
+        if ((game->turn == WHITE && move.to_row == 0) ||
+            (game->turn == BLACK && move.to_row == 7)) {
+            score += 800;
+        }
+    }
+    
+    // Castling: decent priority (safety improvement)
+    if (attacking_piece.type == KING && abs(move.to_col - move.from_col) == 2) {
+        score += 300;
+    }
+    
+    return score;
+}
+
+// Sort moves using quick evaluation for better search ordering
+void chess_sort_moves_by_heuristic(ChessGameState *game, ChessMove *moves, int move_count,
+                                   KillerMoveTable *killers, HistoryHeuristic *history, int depth) {
+    ScoredMove scored[256];
+    
+    for (int i = 0; i < move_count; i++) {
+        scored[i].move = moves[i];
+        scored[i].score = 0;
+        
+        // Killer move bonus
+        if (killers) {
+            for (int k = 0; k < killers->killer_count[depth]; k++) {
+                if (moves[i].from_row == killers->killer_moves[depth][k].from_row &&
+                    moves[i].from_col == killers->killer_moves[depth][k].from_col &&
+                    moves[i].to_row == killers->killer_moves[depth][k].to_row &&
+                    moves[i].to_col == killers->killer_moves[depth][k].to_col) {
+                    scored[i].score += 400 - (k * 100);  // First killer better than second
+                    break;
+                }
+            }
+        }
+        
+        // History heuristic bonus
+        if (history) {
+            scored[i].score += history->history[moves[i].from_row][moves[i].from_col]
+                                               [moves[i].to_row][moves[i].to_col] / 10;
+        }
+        
+        // Quick evaluation of move
+        scored[i].score += chess_quick_eval_move(game, moves[i], true);
+    }
+    
+    // Simple insertion sort (good for small arrays)
+    for (int i = 1; i < move_count; i++) {
+        ScoredMove key = scored[i];
+        int j = i - 1;
+        
+        while (j >= 0 && scored[j].score < key.score) {
+            scored[j + 1] = scored[j];
+            j--;
+        }
+        scored[j + 1] = key;
+    }
+    
+    // Copy back sorted moves
+    for (int i = 0; i < move_count; i++) {
+        moves[i] = scored[i].move;
+    }
+}
+
+// Path elimination: quickly filter out obviously bad moves
+int chess_eliminate_poor_moves(ChessGameState *game, ChessMove *moves, int move_count,
+                               int piece_values[]) {
+    int good_move_count = 0;
+    ChessMove good_moves[256];
+    
+    for (int i = 0; i < move_count; i++) {
+        ChessPiece moving_piece = game->board[moves[i].from_row][moves[i].from_col];
+        ChessPiece target = game->board[moves[i].to_row][moves[i].to_col];
+        
+        // ELIMINATION RULE 1: Avoid captures that lose material (SEE check)
+        // Simplified Static Exchange Evaluation
+        if (target.type != EMPTY) {
+            int target_value = piece_values[target.type];
+            int moving_value = piece_values[moving_piece.type];
+            
+            // Only eliminate if it's clearly bad (we lose much more than we gain)
+            // Allow modest unfavorable exchanges as they may have tactical benefits
+            if (moving_value > target_value * 3) {
+                continue;  // Skip obviously bad capture
+            }
+        }
+        
+        // ELIMINATION RULE 2: Avoid moving into capture unless there's compensation
+        ChessGameState temp = *game;
+        chess_make_move(&temp, moves[i]);
+        ChessPiece moved_piece = temp.board[moves[i].to_row][moves[i].to_col];
+        
+        // Check if piece is hanging (undefended and can be captured)
+        bool is_defended = false;
+        bool can_be_captured = false;
+        
+        // Simple check: is there an enemy piece that can capture this?
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 8; c++) {
+                ChessPiece p = temp.board[r][c];
+                if (p.type != EMPTY && p.color != moved_piece.color) {
+                    // Check if this piece can capture our moved piece
+                    if (chess_is_valid_move(&temp, r, c, moves[i].to_row, moves[i].to_col)) {
+                        can_be_captured = true;
+                        // Loss would be this piece's value
+                        if (piece_values[moved_piece.type] < piece_values[p.type] * 2) {
+                            break;
+                        }
+                    }
+                }
+            }
+            if (can_be_captured) break;
+        }
+        
+        // ELIMINATION RULE 3: Filter check moves separately (always valuable)
+        bool gives_check = chess_is_in_check(&temp, game->turn == WHITE ? BLACK : WHITE);
+        if (gives_check) {
+            good_moves[good_move_count++] = moves[i];
+            continue;
+        }
+        
+        // ELIMINATION RULE 4: Never allow moving into checkmate (king moves only)
+        if (moving_piece.type == KING && chess_is_in_check(&temp, game->turn)) {
+            continue;  // This move leaves us in check
+        }
+        
+        // Keep the move if it passes checks
+        good_moves[good_move_count++] = moves[i];
+    }
+    
+    // Copy good moves back
+    for (int i = 0; i < good_move_count; i++) {
+        moves[i] = good_moves[i];
+    }
+    
+    return good_move_count;
+}
+
+
+static KillerMoveTable global_killers = {0};
+static HistoryHeuristic global_history = {0};
+
+// Clear global tables when starting new search
+static void chess_clear_search_tables() {
+    memset(&global_killers, 0, sizeof(global_killers));
+    memset(&global_history, 0, sizeof(global_history));
+}
+
+// ============================================================================
+// THE FIX: New chess_minimax with original signature
+// ============================================================================
+//
+// This function matches the OLD calling signature from chess_main.cpp:
+//    chess_minimax(game, depth, alpha, beta, maximizing)
+//
+// It uses the optimized algorithm internally with static tables.
+//
+
 int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing) {
+    
+    // Piece values for evaluation
+    static int piece_values[] = {0, 100, 320, 330, 500, 900, 20000};
+    
     ChessMove moves[256];
     int move_count = chess_get_all_moves(game, game->turn, moves);
     
+    // Terminal conditions
     if (move_count == 0) {
         if (chess_is_in_check(game, game->turn)) {
             return maximizing ? (-1000000 + depth) : (1000000 - depth);
         }
-        return 0; // Stalemate
+        return 0;  // Stalemate
     }
     
     if (depth == 0) {
         return chess_evaluate_position(game);
     }
     
+    // PATH ELIMINATION: Filter obviously poor moves
+    // Only at shallow depths to save computation
+    if (depth <= 3) {
+        move_count = chess_eliminate_poor_moves(game, moves, move_count, piece_values);
+        if (move_count == 0) {
+            return chess_evaluate_position(game);
+        }
+    }
+    
+    // MOVE ORDERING: Sort moves to maximize alpha-beta pruning
+    chess_sort_moves_by_heuristic(game, moves, move_count, &global_killers, &global_history, depth);
+    
     if (maximizing) {
         int max_eval = INT_MIN;
+        
         for (int i = 0; i < move_count; i++) {
             ChessGameState temp = *game;
             chess_make_move(&temp, moves[i]);
+            
             int eval = chess_minimax(&temp, depth - 1, alpha, beta, false);
+            
             max_eval = (eval > max_eval) ? eval : max_eval;
             alpha = (alpha > eval) ? alpha : eval;
-            if (beta <= alpha) break;
+            
+            // Beta cutoff
+            if (beta <= alpha) {
+                // Record killer move
+                if (global_killers.killer_count[depth] < MAX_KILLERS_PER_DEPTH) {
+                    global_killers.killer_moves[depth][global_killers.killer_count[depth]] = moves[i];
+                    global_killers.killer_count[depth]++;
+                } else {
+                    global_killers.killer_moves[depth][1] = global_killers.killer_moves[depth][0];
+                    global_killers.killer_moves[depth][0] = moves[i];
+                }
+                
+                // Update history
+                global_history.history[moves[i].from_row][moves[i].from_col]
+                                      [moves[i].to_row][moves[i].to_col] += (1 << depth);
+                
+                break;
+            }
         }
+        
         return max_eval;
+        
     } else {
         int min_eval = INT_MAX;
+        
         for (int i = 0; i < move_count; i++) {
             ChessGameState temp = *game;
             chess_make_move(&temp, moves[i]);
+            
             int eval = chess_minimax(&temp, depth - 1, alpha, beta, true);
+            
             min_eval = (eval < min_eval) ? eval : min_eval;
             beta = (beta < eval) ? beta : eval;
-            if (beta <= alpha) break;
+            
+            // Alpha cutoff
+            if (beta <= alpha) {
+                // Record killer move
+                if (global_killers.killer_count[depth] < MAX_KILLERS_PER_DEPTH) {
+                    global_killers.killer_moves[depth][global_killers.killer_count[depth]] = moves[i];
+                    global_killers.killer_count[depth]++;
+                } else {
+                    global_killers.killer_moves[depth][1] = global_killers.killer_moves[depth][0];
+                    global_killers.killer_moves[depth][0] = moves[i];
+                }
+                
+                // Update history
+                global_history.history[moves[i].from_row][moves[i].from_col]
+                                      [moves[i].to_row][moves[i].to_col] += (1 << depth);
+                
+                break;
+            }
         }
+        
         return min_eval;
     }
 }
