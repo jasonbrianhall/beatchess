@@ -289,52 +289,6 @@ bool chess_is_in_bounds(int r, int c);
 bool chess_is_path_clear(ChessGameState *game, int fr, int fc, int tr, int tc);
 void chess_make_move(ChessGameState *game, ChessMove move);
 
-/* ============================================================================
- * Circular Buffer Helper Functions
- * ============================================================================
- */
-
-/**
- * Get the actual index in the straight buffer for a given move position.
- * @param move_position Position in history (0 = oldest, MAX_MOVE_HISTORY-1 = newest)
- * @param move_count Total number of moves ever made
- * @return Actual index in the straight buffer array (or -1 if invalid)
- */
-static inline int chess_get_history_index(int move_position, int move_count) {
-    // Validate inputs to prevent integer overflow
-    if (move_position < 0 || move_count < 0) {
-        return -1;  // Invalid state
-    }
-    
-    if (move_position >= move_count || move_position >= MAX_MOVE_HISTORY) {
-        return -1;
-    }
-    
-    // Straight buffer - no wrapping
-    return move_position;
-}
-
-/**
- * Get a move from history at a given position (0 = oldest, count-1 = newest)
- * Uses a straight buffer - no circular wrapping
- */
-static inline MoveHistory chess_get_move_from_history(BeatChessVisualization *chess, int position) {
-    MoveHistory empty;
-    memset(&empty, 0, sizeof(MoveHistory));
-    
-    // Validate inputs
-    if (!chess || position < 0 || chess->move_history_count <= 0) {
-        return empty;
-    }
-    
-    if (position >= chess->move_history_count || position >= MAX_MOVE_HISTORY) {
-        return empty;
-    }
-    
-    // Straight buffer - just use position directly
-    return chess->move_history[position];
-}
-
 /**
  * Add a move to the history using circular buffer logic
  */
