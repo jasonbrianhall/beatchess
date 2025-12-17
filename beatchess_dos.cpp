@@ -159,6 +159,12 @@ static void init_chess_game() {
     chess_gui.timer_started = false;
     chess_gui.ai_thinking_start_time = 0;
     
+    /* Reset check/checkmate/stalemate display flags */
+    chess_gui.is_in_check = false;
+    chess_gui.check_display_timer = 0;
+    chess_gui.is_checkmate = false;
+    chess_gui.is_stalemate = false;
+    
     /* Allocate history ONLY if it doesn't exist (first time only) */
     if (!chess_gui.history) {
         chess_gui.history_capacity = 100;
@@ -612,6 +618,59 @@ static void draw_pieces() {
     }
 }
 
+static void draw_check_status() {
+    /* Only draw if something needs to be displayed */
+    bool should_draw = (chess_gui.check_display_timer > 0) || 
+                       chess_gui.is_checkmate || 
+                       chess_gui.is_stalemate;
+    
+    if (!should_draw) return;
+    
+    /* Determine what to display and its color */
+    const char *text = NULL;
+    int text_color = COLOR_WHITE;
+    int box_color = COLOR_WHITE;
+    
+    if (chess_gui.is_checkmate) {
+        text = "CHECKMATE";
+        text_color = COLOR_YELLOW;  /* Gold-ish yellow */
+        box_color = COLOR_YELLOW;
+    } else if (chess_gui.is_stalemate) {
+        text = "STALEMATE";
+        text_color = COLOR_GRAY;
+        box_color = COLOR_GRAY;
+    } else if (chess_gui.check_display_timer > 0) {
+        text = "CHECK";
+        text_color = COLOR_RED;
+        box_color = COLOR_RED;
+    }
+    
+    if (!text) return;
+    
+    /* Calculate center of board */
+    int board_center_x = BOARD_START_X + (8 * SQUARE_SIZE) / 2;
+    int board_center_y = BOARD_START_Y + (8 * SQUARE_SIZE) / 2;
+    
+    /* Calculate text box size */
+    int text_width = strlen(text) * 8;  /* Rough estimate for 8-pixel wide chars */
+    int box_width = text_width + 40;
+    int box_height = 60;
+    int box_x = board_center_x - box_width / 2;
+    int box_y = board_center_y - box_height / 2;
+    
+    /* Draw semi-transparent background box */
+    /* Fill background */
+    rectfill(screen, box_x, box_y, box_x + box_width, box_y + box_height, COLOR_BLACK);
+    
+    /* Draw border with status color */
+    rect(screen, box_x, box_y, box_x + box_width, box_y + box_height, box_color);
+    rect(screen, box_x + 1, box_y + 1, box_x + box_width - 1, box_y + box_height - 1, box_color);
+    
+    /* Draw text centered in box */
+    textout_centre_ex(screen, font, text, board_center_x, board_center_y - 8,
+                      text_color, -1);
+}
+
 static void draw_help_screen() {
     int y = 50;
     
@@ -924,6 +983,12 @@ int main(void) {
     chess_gui.timer_started = false;
     chess_gui.ai_thinking_start_time = 0;
     
+    /* Check/Checkmate/Stalemate display */
+    chess_gui.is_in_check = false;
+    chess_gui.check_display_timer = 0;
+    chess_gui.is_checkmate = false;
+    chess_gui.is_stalemate = false;
+    
     /* Initialize the game board and state */
     init_chess_game();
     
@@ -932,6 +997,27 @@ int main(void) {
     
     /* Game loop */
     while (running) {
+        /* Update check/checkmate/stalemate display */
+        
+        /* Detect check (only during actual gameplay) */
+        bool in_check = chess_is_in_check(&chess_gui.game, chess_gui.game.turn);
+        if (in_check && !chess_gui.is_in_check) {
+            /* Transition from not-in-check to in-check */
+            chess_gui.is_in_check = true;
+            chess_gui.check_display_timer = 1.0;  /* Display "CHECK" for 1 second */
+        } else if (!in_check) {
+            chess_gui.is_in_check = false;
+            chess_gui.check_display_timer = 0;  /* Hide the display */
+        }
+        
+        /* Count down the check display timer */
+        if (chess_gui.check_display_timer > 0) {
+            chess_gui.check_display_timer -= 0.01;  /* ~10ms per frame */
+            if (chess_gui.check_display_timer < 0) {
+                chess_gui.check_display_timer = 0;
+            }
+        }
+        
         /* Check if it's AI's turn */
         bool ai_should_move = false;
         if (chess_gui.ai_vs_ai) {
@@ -1006,6 +1092,49 @@ int main(void) {
                         
                         chess_make_move(&chess_gui.game, ai_move);
                         save_position_to_history();
+                        
+                        /* Check for checkmate or stalemate */
+                        if (!chess_is_in_check(&chess_gui.game, chess_gui.game.turn)) {
+                            /* Current player is not in check - check if they have any legal moves */
+                            ChessMove test_moves[256];
+                            int num_moves = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, test_moves);
+                            
+                            /* Check if all moves are illegal (leave king in check) */
+                            bool has_legal_move = false;
+                            for (int i = 0; i < num_moves; i++) {
+                                ChessGameState temp = chess_gui.game;
+                                chess_make_move(&temp, test_moves[i]);
+                                if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
+                                    has_legal_move = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!has_legal_move) {
+                                /* Stalemate */
+                                chess_gui.is_stalemate = true;
+                            }
+                        } else {
+                            /* Current player is in check - check if they have any legal moves */
+                            ChessMove test_moves[256];
+                            int num_moves = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, test_moves);
+                            
+                            /* Check if all moves are illegal (leave king in check) */
+                            bool has_legal_move = false;
+                            for (int i = 0; i < num_moves; i++) {
+                                ChessGameState temp = chess_gui.game;
+                                chess_make_move(&temp, test_moves[i]);
+                                if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
+                                    has_legal_move = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!has_legal_move) {
+                                /* Checkmate */
+                                chess_gui.is_checkmate = true;
+                            }
+                        }
                     }
                 }
                 
@@ -1057,6 +1186,7 @@ int main(void) {
         } else {
             draw_board();
             draw_pieces();
+            draw_check_status();  /* Draw check/checkmate/stalemate overlay */
             draw_side_panel();
             draw_menu_bar();  /* Draw menu last so it appears on top */
         }
@@ -1228,6 +1358,49 @@ int main(void) {
                                 chess_make_move(&chess_gui.game, move);
                                 save_position_to_history();
                                 chess_gui.ai_move_counter = 0;
+                                
+                                /* Check for checkmate or stalemate */
+                                if (!chess_is_in_check(&chess_gui.game, chess_gui.game.turn)) {
+                                    /* Current player is not in check - check if they have any legal moves */
+                                    ChessMove test_moves[256];
+                                    int num_moves = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, test_moves);
+                                    
+                                    /* Check if all moves are illegal (leave king in check) */
+                                    bool has_legal_move = false;
+                                    for (int i = 0; i < num_moves; i++) {
+                                        ChessGameState temp = chess_gui.game;
+                                        chess_make_move(&temp, test_moves[i]);
+                                        if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
+                                            has_legal_move = true;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if (!has_legal_move) {
+                                        /* Stalemate */
+                                        chess_gui.is_stalemate = true;
+                                    }
+                                } else {
+                                    /* Current player is in check - check if they have any legal moves */
+                                    ChessMove test_moves[256];
+                                    int num_moves = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, test_moves);
+                                    
+                                    /* Check if all moves are illegal (leave king in check) */
+                                    bool has_legal_move = false;
+                                    for (int i = 0; i < num_moves; i++) {
+                                        ChessGameState temp = chess_gui.game;
+                                        chess_make_move(&temp, test_moves[i]);
+                                        if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
+                                            has_legal_move = true;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if (!has_legal_move) {
+                                        /* Checkmate */
+                                        chess_gui.is_checkmate = true;
+                                    }
+                                }
                             }
                         }
                         

@@ -113,6 +113,12 @@ typedef struct {
     int good_move_threshold;       // Score threshold to auto-play (e.g., 200)
     bool auto_play_enabled;        // Whether to auto-play good moves
     
+    // Check/Checkmate/Stalemate display
+    bool is_in_check;              // True if current player is in check
+    double check_display_timer;    // Display "CHECK" for 1 second (0 = not displayed)
+    bool is_checkmate;             // True if game is in checkmate (permanent display)
+    bool is_stalemate;             // True if game is in stalemate (permanent display)
+    
     // GTK UI buttons and controls
     double reset_button_x, reset_button_y;
     double reset_button_width, reset_button_height;
@@ -244,6 +250,12 @@ typedef struct {
     int black_time_frames;
     bool timer_started;
     int ai_thinking_start_time;  /* Track when AI started thinking */
+    
+    /* Check/Checkmate/Stalemate display */
+    bool is_in_check;              /* True if current player is in check */
+    double check_display_timer;    /* Display "CHECK" for 1 second (0 = not displayed) */
+    bool is_checkmate;             /* True if game is in checkmate */
+    bool is_stalemate;             /* True if game is in stalemate */
     
 } ChessGUI;
 

@@ -943,6 +943,12 @@ void init_beat_chess_system(void *vis_ptr) {
     chess->good_move_threshold = 150;   // Auto-play if advantage > 150 centipawns
     chess->auto_play_enabled = true;    // Enable auto-play
     
+    // Check/Checkmate/Stalemate display
+    chess->is_in_check = false;
+    chess->check_display_timer = 0;     // 0 means not displaying
+    chess->is_checkmate = false;
+    chess->is_stalemate = false;
+    
     // Reset button
     chess->reset_button_hovered = false;
     chess->reset_button_glow = 0;
@@ -1031,6 +1037,29 @@ void update_beat_chess(void *vis_ptr, double dt) {
     chess->board_offset_x = (vis->width - chess->cell_size * 8) / 2;
     chess->board_offset_y = (vis->height - chess->cell_size * 8) / 2;
     
+    // ===== CHECK/CHECKMATE/STALEMATE DISPLAY LOGIC =====
+    // Update check display timer
+    if (chess->check_display_timer > 0) {
+        chess->check_display_timer -= dt;
+        if (chess->check_display_timer < 0) {
+            chess->check_display_timer = 0;
+        }
+    }
+    
+    // Check if current player is in check (only during gameplay)
+    if (chess->status == CHESS_PLAYING) {
+        bool in_check = chess_is_in_check(&chess->game, chess->game.turn);
+        if (in_check && !chess->is_in_check) {
+            // Transition from not-in-check to in-check
+            chess->is_in_check = true;
+            chess->check_display_timer = 1.0;  // Display "CHECK" for 1 second
+        } else if (!in_check) {
+            chess->is_in_check = false;
+            chess->check_display_timer = 0;  // Hide the display
+        }
+    }
+    // =========================================
+    
     // ===== CHECK RESET BUTTON INTERACTION =====
     // Detect if mouse is over button (for hover effects)
     bool is_over_reset = (vis->mouse_x >= chess->reset_button_x && 
@@ -1063,6 +1092,12 @@ void update_beat_chess(void *vis_ptr, double dt) {
         chess->animation_progress = 0;
         chess->is_animating = false;
         chess->last_from_row = -1;
+        
+        // Reset check/checkmate/stalemate flags
+        chess->is_in_check = false;
+        chess->check_display_timer = 0;
+        chess->is_checkmate = false;
+        chess->is_stalemate = false;
         
         strcpy(chess->status_text, "Game Reset! White to move");
         chess->status_flash_color[0] = 0.2;
@@ -1364,16 +1399,22 @@ void update_beat_chess(void *vis_ptr, double dt) {
                                     chess->status_flash_color[0] = 0.85;
                                     chess->status_flash_color[1] = 0.65;
                                     chess->status_flash_color[2] = 0.13;
+                                    chess->is_checkmate = true;
+                                    chess->check_display_timer = 0;  // Hide CHECK
                                 } else if (chess->status == CHESS_CHECKMATE_BLACK) {
                                     strcpy(chess->status_text, "Checkmate! White wins!");
                                     chess->status_flash_color[0] = 1.0;
                                     chess->status_flash_color[1] = 1.0;
                                     chess->status_flash_color[2] = 1.0;
+                                    chess->is_checkmate = true;
+                                    chess->check_display_timer = 0;  // Hide CHECK
                                 } else {
                                     strcpy(chess->status_text, "Stalemate!");
                                     chess->status_flash_color[0] = 0.7;
                                     chess->status_flash_color[1] = 0.7;
                                     chess->status_flash_color[2] = 0.7;
+                                    chess->is_stalemate = true;
+                                    chess->check_display_timer = 0;  // Hide CHECK
                                 }
                                 chess->status_flash_timer = 2.0;
                             } else {
@@ -1654,6 +1695,8 @@ void update_beat_chess(void *vis_ptr, double dt) {
         if (chess->move_count >= MAX_MOVES_BEFORE_DRAW) {
             strcpy(chess->status_text, "Draw by move limit! New game in 2 beats...");
             chess->status = CHESS_STALEMATE;
+            chess->is_stalemate = true;
+            chess->check_display_timer = 0;  // Hide CHECK
             chess->waiting_for_restart = true;
             chess->beats_since_game_over = 0;
             return;
@@ -1671,18 +1714,24 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->status_flash_color[0] = 1.0;
                 chess->status_flash_color[1] = 1.0;
                 chess->status_flash_color[2] = 1.0;
+                chess->is_checkmate = true;
+                chess->check_display_timer = 0;  // Hide CHECK
                 chess->status_flash_timer = 2.0;
             } else if (chess->status == CHESS_CHECKMATE_BLACK) {
                 strcpy(chess->status_text, "Checkmate! Black wins! New game in 2 beats...");
                 chess->status_flash_color[0] = 0.85;
                 chess->status_flash_color[1] = 0.65;
                 chess->status_flash_color[2] = 0.13;
+                chess->is_checkmate = true;
+                chess->check_display_timer = 0;  // Hide CHECK
                 chess->status_flash_timer = 2.0;
             } else {
                 strcpy(chess->status_text, "Stalemate! New game in 2 beats...");
                 chess->status_flash_color[0] = 0.7;
                 chess->status_flash_color[1] = 0.7;
                 chess->status_flash_color[2] = 0.7;
+                chess->is_stalemate = true;
+                chess->check_display_timer = 0;  // Hide CHECK
                 chess->status_flash_timer = 2.0;
             }
         } else {
