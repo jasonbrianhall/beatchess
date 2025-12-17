@@ -24,6 +24,7 @@ extern int chess_evaluate_position(ChessGameState *game);
 extern bool chess_is_in_check(ChessGameState *game, ChessColor color);
 extern int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing);
 void save_position_to_history();
+void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c);
 void undo_move();
 
 /* ============================================================================
@@ -175,7 +176,6 @@ void init_chess_gui(void) {
     chess_gui.is_checkmate = false;
     chess_gui.is_stalemate = false;
     
-    chess_gui.history = NULL;
     chess_gui.history_size = 0;
     chess_gui.history_capacity = 0;
     
@@ -201,14 +201,6 @@ bool point_in_rect(int px, int py, int x, int y, int w, int h) {
 }
 
 void cleanup_chess_game() {
-    if (chess_gui.history) {
-        free(chess_gui.history);
-        chess_gui.history = NULL;
-    }
-    if (chess_gui.move_history) {
-        free(chess_gui.move_history);
-        chess_gui.move_history = NULL;
-    }
     chess_gui.history_size = 0;
     chess_gui.history_capacity = 0;
     chess_gui.move_history_count = 0;
@@ -224,7 +216,6 @@ void init_chess_game() {
     /* Save settings that should persist across new games */
     bool saved_ai_vs_ai = chess_gui.ai_vs_ai;
     bool saved_player_is_white = chess_gui.player_is_white;
-    ChessGameState *saved_history = chess_gui.history;
     int saved_capacity = chess_gui.history_capacity;
     
     /* DON'T use memset on the entire structure - it's too large and causes issues */
@@ -233,7 +224,6 @@ void init_chess_game() {
     /* Restore/set saved values first */
     chess_gui.ai_vs_ai = saved_ai_vs_ai;
     chess_gui.player_is_white = saved_player_is_white;
-    chess_gui.history = saved_history;
     chess_gui.history_capacity = saved_capacity;
     
     /* Initialize board */
@@ -283,17 +273,6 @@ void init_chess_game() {
     chess_gui.is_checkmate = false;
     chess_gui.is_stalemate = false;
     
-    /* Allocate history ONLY if it doesn't exist (first time only) */
-    if (!chess_gui.history) {
-        chess_gui.history_capacity = MAX_MOVE_HISTORY;  /* Use constant from header */
-        chess_gui.history = (ChessGameState *)malloc(sizeof(ChessGameState) * chess_gui.history_capacity);
-        chess_gui.move_history = (MoveHistory *)malloc(sizeof(MoveHistory) * chess_gui.history_capacity);
-        if (!chess_gui.history || !chess_gui.move_history) {
-            printf("ERROR: Failed to allocate history buffers\n");
-            exit(1);
-        }
-    }
-    
     /* Clear the entire history buffer to prevent stale data from old games */
     for (int i = 0; i < chess_gui.history_capacity; i++) {
         chess_gui.history[i].board[0][0].type = EMPTY;
@@ -323,27 +302,47 @@ void init_chess_game() {
 /**
  * Save the current game position to history using a straight buffer.
  * Once the buffer is full, no more moves are saved (prevents overflow).
+ * 
+ * FIXED: Added defensive check to resync move_history_index if corrupted by undo,
+ * and added move parameter to store the move that created this position
  */
 void save_position_to_history() {
+    save_position_to_history_with_move(0, 0, 0, 0);  /* Delegate to version with move info */
+}
+
+/**
+ * Save position with the move that created it (for better undo/replay)
+ */
+void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c) {
     /* Safety check - make sure we have history buffer */
     if (!chess_gui.history || !chess_gui.move_history) {
         return;
     }
     
+    /* Ensure move_history_index is in valid range (defensive against corruption) */
+    if (chess_gui.move_history_index < 0 || chess_gui.move_history_index >= chess_gui.history_capacity) {
+        /* Resync to history_size if corrupted */
+        chess_gui.move_history_index = chess_gui.history_size;
+    }
+    
     /* Don't save if buffer is full - prevent overflow */
-    if (chess_gui.history_size >= chess_gui.history_capacity) {
+    if (chess_gui.move_history_index >= chess_gui.history_capacity) {
         return;
     }
     
     /* Store at current write position */
-    chess_gui.history[chess_gui.history_size] = chess_gui.game;
-    chess_gui.move_history[chess_gui.history_size].game_state = chess_gui.game;
-    chess_gui.move_history[chess_gui.history_size].time_elapsed = 0;
+    chess_gui.history[chess_gui.move_history_index] = chess_gui.game;
+    chess_gui.move_history[chess_gui.move_history_index].game_state = chess_gui.game;
+    chess_gui.move_history[chess_gui.move_history_index].move.from_row = from_r;
+    chess_gui.move_history[chess_gui.move_history_index].move.from_col = from_c;
+    chess_gui.move_history[chess_gui.move_history_index].move.to_row = to_r;
+    chess_gui.move_history[chess_gui.move_history_index].move.to_col = to_c;
+    chess_gui.move_history[chess_gui.move_history_index].time_elapsed = 0;
     
     /* Increment counters together - keep them in sync */
-    chess_gui.history_size++;
+    chess_gui.move_history_index++;
+    chess_gui.history_size = chess_gui.move_history_index;  /* Keep synchronized */
     chess_gui.move_history_count = chess_gui.history_size;
-    chess_gui.move_history_index = chess_gui.history_size;
     chess_gui.move_count = chess_gui.history_size;
     
     /* Start timer after first move is saved (when we have 2+ positions) */
@@ -356,78 +355,144 @@ void save_position_to_history() {
  * Undo the last move(s).
  * In Player vs AI mode, undoes TWO moves (player's move + AI's response)
  * In AI vs AI mode, undoes ONE move
+ * 
+ * FIXED: Properly calculate restore_index BEFORE modifying history_size,
+ * keep move_history_index synchronized, AND restore the visual state (last_move)
+ * using stored move information from move_history
  */
+void printToSerial(const char *fmt, ...) {
+    FILE *serial = fopen("COM1", "w");
+    if (!serial) return;
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(serial, fmt, args);
+    va_end(args);
+
+    fclose(serial);
+}
+
+
 void undo_move() {
+    printToSerial("In Undo Move\n");
+
     /* Don't allow undo while AI is computing */
-    if (chess_gui.ai_computing) {
+    if (chess_gui.ai_computing) { 
+        printToSerial("AI computing, abort undo\n");
         return;
     }
     
     /* Safety check - make sure we have history initialized */
     if (!chess_gui.history || !chess_gui.move_history || chess_gui.history_capacity <= 0) {
+        printToSerial("exit 1: history not initialized\n");
         return;
     }
     
     /* Can't undo if we only have the initial position (need at least 2 positions) */
     if (chess_gui.history_size < 2) {
+        printToSerial("exit 2: not enough history\n");
         return;
     }
     
-    /* In Player vs AI mode, undo TWO moves (player's move + AI's response)
-     * so the player gets their turn back. In AI vs AI mode, just undo one. */
+    /* Determine how many moves to undo */
     int moves_to_undo = chess_gui.ai_vs_ai ? 1 : 2;
+    printToSerial("moves_to_undo = %d\n", moves_to_undo);
     
     /* Don't undo more moves than we have (must keep initial position at index 0) */
     if (chess_gui.history_size - moves_to_undo < 1) {
         moves_to_undo = chess_gui.history_size - 1;
+        printToSerial("adjusted moves_to_undo = %d\n", moves_to_undo);
     }
     
     /* Safety check: can't undo if we'd go past the beginning */
     if (moves_to_undo <= 0) {
+        printToSerial("exit 3: moves_to_undo <= 0\n");
         return;
     }
     
-    /* Simple approach: just decrement history_size and restore state from straight buffer */
+    /* CRITICAL: Calculate indices BEFORE modifying history_size */
+    int restore_index = chess_gui.history_size - moves_to_undo - 1;
+    int last_move_index = restore_index;
+    printToSerial("restore_index = %d, last_move_index = %d\n", restore_index, last_move_index);
+    
+    /* Validate restore_index with full bounds checking */
+    if (restore_index < 0) {
+        printToSerial("restore_index < 0, resetting\n");
+        restore_index = 0;
+        last_move_index = -1;
+    }
+    if (restore_index >= chess_gui.history_capacity) {
+        printToSerial("restore_index >= capacity, resetting\n");
+        chess_gui.history_size = 1;
+        restore_index = 0;
+        last_move_index = -1;
+    }
+    
+    /* Now it's safe to update history_size */
     chess_gui.history_size -= moves_to_undo;
+    printToSerial("new history_size = %d\n", chess_gui.history_size);
     
     /* Extra safety: ensure we didn't underflow */
     if (chess_gui.history_size < 1) {
-        chess_gui.history_size = 1;  /* Always keep the initial position */
-    }
-    
-    /* Get the previous game state from history */
-    int restore_index = chess_gui.history_size - 1;
-    if (restore_index < 0 || restore_index >= chess_gui.history_capacity) {
+        printToSerial("history_size underflow, resetting\n");
         chess_gui.history_size = 1;
         restore_index = 0;
+        last_move_index = -1;
     }
     
-    chess_gui.game = chess_gui.history[restore_index];
+    /* Restore game state from the valid restore_index */
+    if (restore_index >= 0 && restore_index < chess_gui.history_capacity) {
+        printToSerial("Restoring game state from index %d\n", restore_index);
+        chess_gui.game = chess_gui.history[restore_index];
+    } else {
+        printToSerial("Invalid restore_index, reinitializing board\n");
+        chess_init_board(&chess_gui.game);
+        last_move_index = -1;
+    }
+    
     chess_gui.move_history_count = chess_gui.history_size;
     chess_gui.move_history_index = chess_gui.history_size;
     chess_gui.move_count = chess_gui.history_size;
     
+    /* Restore the last move display */
+    if (last_move_index > 0 && last_move_index < chess_gui.history_capacity) {
+        int previous_move_index = last_move_index - 1;
+        printToSerial("last_move_index = %d, previous_move_index = %d\n", last_move_index, previous_move_index);
+        if (previous_move_index >= 0 && previous_move_index < chess_gui.history_capacity) {
+            ChessMove prev_move = chess_gui.move_history[previous_move_index].move;
+            if (prev_move.from_row >= 0) {
+                printToSerial("Restoring last move display\n");
+                chess_gui.last_move_from_row = prev_move.from_row;
+                chess_gui.last_move_from_col = prev_move.from_col;
+                chess_gui.last_move_to_row = prev_move.to_row;
+                chess_gui.last_move_to_col = prev_move.to_col;
+                chess_gui.has_last_move = true;
+            } else {
+                printToSerial("Invalid prev_move, clearing last move\n");
+                chess_gui.has_last_move = false;
+            }
+        } else {
+            printToSerial("previous_move_index out of bounds\n");
+            chess_gui.has_last_move = false;
+        }
+    } else {
+        printToSerial("No last move to show\n");
+        chess_gui.has_last_move = false;
+    }
+    
     /* Clear piece selection after undo */
+    printToSerial("Clearing piece selection\n");
     chess_gui.piece_selected = false;
     chess_gui.piece_selected_row = -1;
     chess_gui.piece_selected_col = -1;
     chess_gui.selected_row = -1;
     chess_gui.selected_col = -1;
     
-    /* Clear AI state - reset thinking so AI can move again if needed */
+    /* Clear AI state */
+    printToSerial("Resetting AI state\n");
     chess_gui.ai_thinking = false;
     chess_gui.ai_computing = false;
     chess_gui.ai_move_counter = 0;
-    chess_gui.ai_best_move.from_row = -1;
-    chess_gui.ai_best_move.from_col = -1;
-    chess_gui.ai_best_move.to_row = -1;
-    chess_gui.ai_best_move.to_col = -1;
-    
-    /* Clear status flags - they will be recalculated in the main loop */
-    chess_gui.is_checkmate = false;
-    chess_gui.is_stalemate = false;
-    chess_gui.is_in_check = false;
-    chess_gui.check_display_timer = 0;
 }
 
 /* Global counter for making AI computation interruptible */
@@ -1236,7 +1301,8 @@ int main(void) {
                         chess_gui.has_last_move = true;
                         
                         chess_make_move(&chess_gui.game, ai_move);
-                        save_position_to_history();
+                        save_position_to_history_with_move(ai_move.from_row, ai_move.from_col, 
+                                                            ai_move.to_row, ai_move.to_col);
                         
                         /* Check for checkmate or stalemate */
                         if (!chess_is_in_check(&chess_gui.game, chess_gui.game.turn)) {
@@ -1501,7 +1567,10 @@ int main(void) {
                                 chess_gui.has_last_move = true;
                                 
                                 chess_make_move(&chess_gui.game, move);
-                                save_position_to_history();
+                                save_position_to_history_with_move(chess_gui.piece_selected_row, 
+                                                                    chess_gui.piece_selected_col,
+                                                                    chess_gui.selected_row, 
+                                                                    chess_gui.selected_col);
                                 chess_gui.ai_move_counter = 0;
                                 
                                 /* Check for checkmate or stalemate */
@@ -1682,7 +1751,9 @@ int main(void) {
                                     chess_gui.has_last_move = true;
                                     
                                     chess_make_move(&chess_gui.game, move);
-                                    save_position_to_history();
+                                    save_position_to_history_with_move(chess_gui.selected_row, 
+                                                                        chess_gui.selected_col,
+                                                                        row, col);
                                     /* Turn is switched by chess_make_move */
                                     chess_gui.ai_move_counter = 0;  /* Reset AI timer */
                                 }

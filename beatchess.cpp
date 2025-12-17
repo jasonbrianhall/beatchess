@@ -876,7 +876,6 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
         if (chess->black_total_time < 0) chess->black_total_time = 0;
         
         chess->move_history_count = 0;
-        chess->move_history_index = 0;
         
         snprintf(chess->status_text, sizeof(chess->status_text),
                 "Opening move undone - try again");
@@ -1000,7 +999,6 @@ void init_beat_chess_system(void *vis_ptr) {
     
     // Move history
     chess->move_history_count = 0;
-    chess->move_history_index = 0;
     
     // Time tracking
     chess->white_total_time = 0.0;
@@ -1268,7 +1266,6 @@ void update_beat_chess(void *vis_ptr, double dt) {
             
             // Clear move history
             chess->move_history_count = 0;
-            chess->move_history_index = 0;
             
             // Clear selection
             chess->has_selected_piece = false;

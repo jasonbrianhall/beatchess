@@ -164,10 +164,8 @@ typedef struct {
     double cell_size;
     int move_count;
     
-    // Move history (circular buffer)
-    MoveHistory move_history[MAX_MOVE_HISTORY];
+    MoveHistory move_history[MAX_MOVE_HISTORY*2];
     int move_history_count;      // Total number of moves made (increments continuously)
-    int move_history_index;      // Current write position in circular buffer
     
     // Time tracking
     double white_total_time;  // Cumulative time for White
@@ -230,8 +228,8 @@ typedef struct {
     bool has_last_move;
     
     /* History - straight buffer (no circular wrapping) */
-    ChessGameState *history;
-    MoveHistory *move_history;     /* Use MoveHistory for timing info */
+    ChessGameState history[MAX_MOVE_HISTORY*2];
+    MoveHistory move_history[MAX_MOVE_HISTORY*2];     /* Use MoveHistory for timing info */
     int history_size;              /* Number of moves currently in buffer (0 to MAX_MOVE_HISTORY) */
     int history_capacity;          /* Buffer capacity (should be MAX_MOVE_HISTORY) */
     
