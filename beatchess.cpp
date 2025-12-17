@@ -1130,7 +1130,6 @@ void* chess_think_continuously(void* arg) {
                     int candidate_count = 0;
                     int threshold = 500;  // Consider moves within 50 centipawns of best
                     
-                    printf("\n\nDEPTH %d UPDATE:\n", depth);
                     // Use the already-calculated scores from the main loop (lines 1079-1115)
                     // Don't recalculate - just look at which moves are near-best
                     for (int i = 0; i < move_count; i++) {
@@ -1150,27 +1149,16 @@ void* chess_think_continuously(void* arg) {
                             candidate_moves[candidate_count].score = score;
                             candidate_count++;
                         }
-                        printf("Scores %i, move_count %i i %i\n", score, move_count, i);
                     }
 
-                    printf("Players turn is %s\n", (game_copy.turn == WHITE) ? "White" : "Black");
-                    printf("candidate count is %i best_move count is %i\n", candidate_count, best_move_count);
 
                     // Randomly select from candidate moves
                     // This gives higher-scoring moves more chances to be picked
                     // but lower-scoring moves still have a chance
                     if (candidate_count > 0) {
-                        printf("At 1\n");
                         int choice = rand() % candidate_count;
                         ts->best_move = candidate_moves[choice].move;
-                        printf("SELECTED: Picking candidate %i (score: %i) from_row=%d from_col=%d to_row=%d to_col=%d\n", 
-                               choice, candidate_moves[choice].score,
-                               candidate_moves[choice].move.from_row,
-                               candidate_moves[choice].move.from_col,
-                               candidate_moves[choice].move.to_row,
-                               candidate_moves[choice].move.to_col);
                     } else {
-                        printf("At 2\n");
                         ts->best_move = best_moves[rand() % best_move_count];
                     }
                     
@@ -1190,7 +1178,6 @@ void* chess_think_continuously(void* arg) {
         pthread_mutex_lock(&ts->lock);
 #endif
         ts->thinking = false;
-        //printf("THINK: Finished thinking, final depth=%d, has_move=%d\n",  ts->current_depth, ts->has_move);
 #if BEATCHESS_HAS_PTHREAD
         pthread_mutex_unlock(&ts->lock);
 #endif
@@ -1235,15 +1222,11 @@ ChessMove chess_get_best_move_now(ChessThinkingState *ts) {
     pthread_mutex_unlock(&ts->lock);
 #endif
     
-    printf("CHESS_GET_BEST_MOVE_NOW: has_move=%d depth=%d\n", has_move, depth);
     if (has_move) {
-        printf("  Found move: from_row=%d from_col=%d to_row=%d to_col=%d\n",
-               move.from_row, move.from_col, move.to_row, move.to_col);
     }
     
     if (!has_move) {
         // No move found yet - pick random legal move as fallback
-        printf("  NO MOVE FOUND, USING RANDOM FALLBACK\n");
         ChessMove moves[256];
         int count = chess_get_all_moves(&ts->game, ts->game.turn, moves);
         if (count > 0) {
