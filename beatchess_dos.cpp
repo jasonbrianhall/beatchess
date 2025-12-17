@@ -123,10 +123,6 @@ const char *menu_items[] = {
 
 #define NUM_MENU_ITEMS (sizeof(menu_items) / sizeof(menu_items[0]))
 
-void init_chess_gui(void) {
-
-}
-
 /* ============================================================================
  * Helper functions
  * ============================================================================
@@ -205,7 +201,7 @@ void init_chess_game() {
     chess_gui.black_total_time = 0;
     chess_gui.current_move_start_time = 0;
     chess_gui.last_move_end_time = 0;
-
+    chess_gui.history_capacity = MAX_MOVE_HISTORY*2;
     /* Reset check/checkmate/stalemate flags */
     chess_gui.is_in_check = false;
     chess_gui.check_display_timer = 0;
@@ -259,19 +255,25 @@ void save_position_to_history() {
  * Save position with the move that created it (for better undo/replay)
  */
 void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c) {
+    printToSerial("DEBUG: Entering save_position_to_history_with_move (from %d,%d to %d,%d)\n",
+                  from_r, from_c, to_r, to_c);
 
     /* Ensure move_history_index is in valid range (defensive against corruption) */
     if (chess_gui.move_history_index < 0 || chess_gui.move_history_index >= chess_gui.history_capacity) {
-        /* Resync to history_size if corrupted */
+        printToSerial("WARNING: move_history_index (%d) out of range [0..%d], resyncing to history_size (%d)\n",
+                      chess_gui.move_history_index, chess_gui.history_capacity - 1, chess_gui.history_size);
         chess_gui.move_history_index = chess_gui.history_size;
     }
     
     /* Don't save if buffer is full - prevent overflow */
     if (chess_gui.move_history_index >= chess_gui.history_capacity) {
+        printToSerial("ERROR: Buffer full, cannot save move. index=%d capacity=%d\n",
+                      chess_gui.move_history_index, chess_gui.history_capacity);
         return;
     }
     
     /* Store at current write position */
+    printToSerial("DEBUG: Saving move at index %d\n", chess_gui.move_history_index);
     chess_gui.history[chess_gui.move_history_index] = chess_gui.game;
     chess_gui.move_history[chess_gui.move_history_index].game_state = chess_gui.game;
     chess_gui.move_history[chess_gui.move_history_index].move.from_row = from_r;
@@ -284,12 +286,18 @@ void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to
     chess_gui.move_history_index++;
     chess_gui.history_size = chess_gui.move_history_index;  /* Keep synchronized */
     chess_gui.move_history_count = chess_gui.history_size;
+    printToSerial("DEBUG: Counters updated -> move_history_index=%d history_size=%d move_history_count=%d\n",
+                  chess_gui.move_history_index, chess_gui.history_size, chess_gui.move_history_count);
     
     /* Start timer after first move is saved (when we have 2+ positions) */
     if (chess_gui.history_size == 2) {
         chess_gui.timer_started = true;
+        printToSerial("DEBUG: Timer started (history_size=%d)\n", chess_gui.history_size);
     }
+
+    printToSerial("DEBUG: Exiting save_position_to_history_with_move\n");
 }
+
 
 void undo_move() {
     printToSerial("\n\nIn Undo Move\n");
