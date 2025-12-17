@@ -75,7 +75,7 @@ jobs:
         path: release-artifacts/
 
   create-release:
-    needs: [build-windows, build-msdos]
+    needs: [build-msdos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
