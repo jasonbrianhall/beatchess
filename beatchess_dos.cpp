@@ -609,6 +609,52 @@ ChessMove compute_ai_move() {
         chess_gui.ai_total_moves = num_moves;
     }
     
+    /* Non-deterministic move selection: collect moves within 50 centipawns of best */
+    typedef struct {
+        ChessMove move;
+        int score;
+    } ScoredMove;
+    
+    ScoredMove candidate_moves[256];
+    int candidate_count = 0;
+    int threshold = 50;  /* 50 centipawns */
+    
+    printf("Best score: %d, collecting candidates within %d centipawns\n", best_score, threshold);
+    
+    for (int i = 0; i < num_moves; i++) {
+        ChessGameState temp = chess_gui.game;
+        chess_make_move(&temp, moves[i]);
+        
+        /* Skip if move leaves king in check */
+        if (chess_is_in_check(&temp, chess_gui.game.turn)) {
+            continue;
+        }
+        
+        bool opponent_is_white = (temp.turn == WHITE);
+        int score = chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
+        
+        /* Check if within threshold */
+        bool is_close = false;
+        if (we_are_white) {
+            is_close = (score >= best_score - threshold);
+        } else {
+            is_close = (score <= best_score + threshold);
+        }
+        
+        if (is_close) {
+            candidate_moves[candidate_count].move = moves[i];
+            candidate_moves[candidate_count].score = score;
+            candidate_count++;
+        }
+    }
+    
+    /* Randomly pick from candidates */
+    if (candidate_count > 0) {
+        int choice = rand() % candidate_count;
+        best_move = candidate_moves[choice].move;
+        printf("Randomly selected move %d of %d candidates\n", choice, candidate_count);
+    }
+    
     return best_move;
 }
 
