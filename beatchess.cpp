@@ -100,7 +100,10 @@ bool chess_is_valid_move(ChessGameState *game, int fr, int fc, int tr, int tc) {
             
             // En passant capture
             if (abs(dc) == 1 && dr == direction && target.type == EMPTY) {
-                if (game->en_passant_col == tc && game->en_passant_row == tr) {
+                // Validate en_passant state is initialized and in bounds
+                if (game->en_passant_col >= 0 && game->en_passant_col < BOARD_SIZE &&
+                    game->en_passant_row >= 0 && game->en_passant_row < BOARD_SIZE &&
+                    game->en_passant_col == tc && game->en_passant_row == tr) {
                     return true;
                 }
             }
@@ -1661,12 +1664,19 @@ void update_beat_chess(void *vis_ptr, double dt) {
         const char *piece_names[] = {"", "Pawn", "Knight", "Bishop", "Rook", "Queen", "King"};
         ChessPiece moved_piece = chess->game.board[forced_move.to_row][forced_move.to_col];
         
+        // Bounds check piece type before using as array index
+        #define NUM_PIECE_NAMES (sizeof(piece_names) / sizeof(piece_names[0]))
+        int piece_idx = moved_piece.type;
+        if (piece_idx < 0 || piece_idx >= int(NUM_PIECE_NAMES)) {
+            piece_idx = 0;  // Default to empty string if invalid
+        }
+        
         const char *trigger = should_auto_play ? "AUTO" : "BEAT";
         
         if (eval_change < -500) {
             snprintf(chess->status_text, sizeof(chess->status_text),
                     "[%s] BLUNDER! %s %c%d->%c%d (depth %d, -%d)",
-                    trigger, piece_names[moved_piece.type],
+                    trigger, piece_names[piece_idx],
                     'a' + forced_move.from_col, 8 - forced_move.from_row,
                     'a' + forced_move.to_col, 8 - forced_move.to_row,
                     depth_reached, -eval_change);
@@ -1677,7 +1687,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
         } else if (eval_change > 200) {
             snprintf(chess->status_text, sizeof(chess->status_text),
                     "[%s] Brilliant! %s %c%d->%c%d (depth %d, +%d)",
-                    trigger, piece_names[moved_piece.type],
+                    trigger, piece_names[piece_idx],
                     'a' + forced_move.from_col, 8 - forced_move.from_row,
                     'a' + forced_move.to_col, 8 - forced_move.to_row,
                     depth_reached, eval_change);
@@ -1689,7 +1699,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
             snprintf(chess->status_text, sizeof(chess->status_text),
                     "[%s] %s: %s %c%d->%c%d (depth %d)",
                     trigger, moving_color == WHITE ? "White" : "Black",
-                    piece_names[moved_piece.type],
+                    piece_names[piece_idx],
                     'a' + forced_move.from_col, 8 - forced_move.from_row,
                     'a' + forced_move.to_col, 8 - forced_move.to_row,
                     depth_reached);
@@ -1701,7 +1711,8 @@ void update_beat_chess(void *vis_ptr, double dt) {
         
         // Check move limit
         if (chess->move_count >= MAX_MOVES_BEFORE_DRAW) {
-            strcpy(chess->status_text, "Draw by move limit! New game in 2 beats...");
+            snprintf(chess->status_text, sizeof(chess->status_text),
+                    "Draw by move limit! New game in 2 beats...");
             chess->status = CHESS_STALEMATE;
             chess->is_stalemate = true;
             chess->check_display_timer = 0;  // Hide CHECK
@@ -1718,7 +1729,8 @@ void update_beat_chess(void *vis_ptr, double dt) {
             chess->beats_since_game_over = 0;
             
             if (chess->status == CHESS_CHECKMATE_WHITE) {
-                strcpy(chess->status_text, "Checkmate! White wins! New game in 2 beats...");
+                snprintf(chess->status_text, sizeof(chess->status_text),
+                        "Checkmate! White wins! New game in 2 beats...");
                 chess->status_flash_color[0] = 1.0;
                 chess->status_flash_color[1] = 1.0;
                 chess->status_flash_color[2] = 1.0;
@@ -1726,7 +1738,8 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->check_display_timer = 0;  // Hide CHECK
                 chess->status_flash_timer = 2.0;
             } else if (chess->status == CHESS_CHECKMATE_BLACK) {
-                strcpy(chess->status_text, "Checkmate! Black wins! New game in 2 beats...");
+                snprintf(chess->status_text, sizeof(chess->status_text),
+                        "Checkmate! Black wins! New game in 2 beats...");
                 chess->status_flash_color[0] = 0.85;
                 chess->status_flash_color[1] = 0.65;
                 chess->status_flash_color[2] = 0.13;
@@ -1734,7 +1747,8 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->check_display_timer = 0;  // Hide CHECK
                 chess->status_flash_timer = 2.0;
             } else {
-                strcpy(chess->status_text, "Stalemate! New game in 2 beats...");
+                snprintf(chess->status_text, sizeof(chess->status_text),
+                        "Stalemate! New game in 2 beats...");
                 chess->status_flash_color[0] = 0.7;
                 chess->status_flash_color[1] = 0.7;
                 chess->status_flash_color[2] = 0.7;

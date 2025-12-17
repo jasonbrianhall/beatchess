@@ -294,6 +294,11 @@ void chess_make_move(ChessGameState *game, ChessMove move);
  * @return Actual index in the circular buffer array
  */
 static inline int chess_get_history_index(int move_position, int move_count) {
+    // Validate inputs to prevent integer overflow
+    if (move_position < 0 || move_count < 0) {
+        return 0;  // Invalid state
+    }
+    
     if (move_count <= MAX_MOVE_HISTORY) {
         return move_position;
     }
@@ -304,18 +309,40 @@ static inline int chess_get_history_index(int move_position, int move_count) {
  * Get a move from history at a given position (0 = oldest available, newest = count-1)
  */
 static inline MoveHistory chess_get_move_from_history(BeatChessVisualization *chess, int position) {
-    if (position < 0 || position >= chess->move_history_count) {
-        MoveHistory empty;
-        memset(&empty, 0, sizeof(MoveHistory));
+    MoveHistory empty;
+    memset(&empty, 0, sizeof(MoveHistory));
+    
+    // Validate inputs
+    if (!chess || position < 0 || chess->move_history_count < 0) {
         return empty;
     }
+    
+    if (position >= chess->move_history_count) {
+        return empty;
+    }
+    
     // If we have fewer moves than buffer size, just use position directly
     if (chess->move_history_count <= MAX_MOVE_HISTORY) {
+        if (position < 0 || position >= MAX_MOVE_HISTORY) {
+            return empty;
+        }
         return chess->move_history[position];
     }
+    
     // Otherwise, calculate actual index from circular buffer
-    int start_index = (chess->move_history_index + MAX_MOVE_HISTORY - chess->move_history_count % MAX_MOVE_HISTORY) % MAX_MOVE_HISTORY;
+    // Cap move_count to prevent overflow
+    int effective_count = (chess->move_history_count > MAX_MOVE_HISTORY) ? 
+                          MAX_MOVE_HISTORY : chess->move_history_count;
+    
+    int start_index = (chess->move_history_index + MAX_MOVE_HISTORY - 
+                      (effective_count % MAX_MOVE_HISTORY)) % MAX_MOVE_HISTORY;
     int actual_index = (start_index + position) % MAX_MOVE_HISTORY;
+    
+    // Final bounds check
+    if (actual_index < 0 || actual_index >= MAX_MOVE_HISTORY) {
+        return empty;
+    }
+    
     return chess->move_history[actual_index];
 }
 
