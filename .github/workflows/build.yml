@@ -4,17 +4,14 @@ on:
   push:
     branches: [ main, dev ]
   pull_request:
-    branches: [ master, dev ]
+    branches: [ main, dev ]
   workflow_dispatch:
 
 env:
   PRODUCT_VERSION: "1.0.${{ github.run_number }}"
-  UPGRADE_CODE: "E1A85D73-9B2C-4E6D-B3C1-8F0A9D2E5C7B"
 
 jobs:
   build-msdos:
-    # Skipped on 'windows' branch for faster builds
-    if: github.ref != 'refs/heads/windows'
     runs-on: ubuntu-latest
     container: 
       image: djfdyuruiry/djgpp
