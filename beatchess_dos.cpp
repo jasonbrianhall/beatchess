@@ -42,6 +42,11 @@ extern int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, b
 #define MENU_BAR_HEIGHT 20
 #define MENU_ITEM_WIDTH 80
 
+/* Define custom colors for chess board (green and cream/beige) */
+#define LIGHT_SQUARE 15   /* Light beige/cream color */
+#define DARK_SQUARE 46    /* Dark green color */
+
+
 /* Side panel buttons */
 Button side_buttons[] = {
     {BUTTON_PANEL_X, BUTTON_PANEL_Y + 0, BUTTON_WIDTH, BUTTON_HEIGHT, "New Game (N)", 'N', true},
@@ -484,21 +489,21 @@ static void draw_side_panel() {
     textout_ex(screen, font, "Game Info:", BUTTON_PANEL_X, info_y, COLOR_YELLOW, -1);
     
     char buf[64];
-    snprintf(buf, "Move: %d", chess_gui.history_size, 64);
+    snprintf(buf, 64, "Move: %d", chess_gui.history_size);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 20, COLOR_WHITE, -1);
     
     const char *turn_str = (chess_gui.game.turn == WHITE) ? "White" : "Black";
-    snprintf(buf, "Turn: %s", turn_str, 64);
+    snprintf(buf, 64, "Turn: %s", turn_str);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 35, COLOR_WHITE, -1);
     
     const char *mode_str = chess_gui.ai_vs_ai ? "AI vs AI" : 
                           (chess_gui.player_is_white ? "Player vs AI" : "AI vs Player");
-    snprintf(buf, "Mode: %s", mode_str, 64);
+    snprintf(buf, 64, "Mode: %s", mode_str);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 50, COLOR_WHITE, -1);
     
     if (!chess_gui.ai_vs_ai) {
         const char *player_color = chess_gui.player_is_white ? "White" : "Black";
-        snprintf(buf, "You: %s", player_color, 64);
+        snprintf(buf, 64, "You: %s", player_color);
         textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 65, COLOR_GREEN, -1);
     }
     
@@ -509,23 +514,23 @@ static void draw_side_panel() {
     /* White time */
     int white_mins = chess_gui.white_time_seconds / 60;
     int white_secs = chess_gui.white_time_seconds % 60;
-    snprintf(buf, "White: %d:%02d", white_mins, white_secs, 64);
+    snprintf(buf, 64, "White: %d:%02d", white_mins, white_secs);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 15, COLOR_WHITE, -1);
     
     /* Black time */
     int black_mins = chess_gui.black_time_seconds / 60;
     int black_secs = chess_gui.black_time_seconds % 60;
-    snprintf(buf, "Black: %d:%02d", black_mins, black_secs, 64);
+    snprintf(buf, 64, "Black: %d:%02d", black_mins, black_secs);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 30, COLOR_WHITE, -1);
     
     /* AI thinking indicator */
     if (chess_gui.ai_thinking) {
-        snprintf(buf, "AI thinking...", 64);
+        snprintf(buf, 64, "AI thinking...");
         textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 50, COLOR_MAGENTA, -1);
-        snprintf(buf, "Depth: %d", chess_gui.ai_search_depth, 64);
+        snprintf(buf, 64, "Depth: %d", chess_gui.ai_search_depth);
         textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 65, COLOR_MAGENTA, -1);
         if (chess_gui.ai_total_moves > 0) {
-            snprintf(buf, "Move: %d/%d", chess_gui.ai_evaluated_moves, chess_gui.ai_total_moves, 64);
+            snprintf(buf, 64, "Move: %d/%d", chess_gui.ai_evaluated_moves, chess_gui.ai_total_moves);
             textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 80, COLOR_MAGENTA, -1);
         }
     }
@@ -533,10 +538,7 @@ static void draw_side_panel() {
 
 static void draw_board() {
     int x, y, color;
-    
-    /* Define custom colors for chess board (green and cream/beige) */
-    #define LIGHT_SQUARE 15   /* Light beige/cream color */
-    #define DARK_SQUARE 46    /* Dark green color */
+    char buf[64];
     
     /* Draw chess board - 50 pixels per square */
     for (y = 0; y < 8; y++) {
@@ -586,8 +588,7 @@ static void draw_board() {
     
     /* Draw rank labels (8-1) */
     for (y = 0; y < 8; y++) {
-        char buf[64];
-        snprintf(buf, "%d", 8 - y, 64);
+        snprintf(buf, 64, "%d", 8 - y);
         textout_ex(screen, font, buf, BOARD_START_X - 20, BOARD_START_Y + 15 + y * SQUARE_SIZE, COLOR_WHITE, -1);
     }
     
