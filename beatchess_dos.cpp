@@ -38,16 +38,29 @@ extern int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, b
  */
 static inline int get_circular_index(int position, int history_count, 
                                       int history_start, int buffer_size) {
-    if (position < 0 || position >= history_count) {
+    // Validate all inputs
+    if (position < 0 || history_count < 0 || history_start < 0 || buffer_size <= 0) {
+        return -1;
+    }
+    
+    if (position >= history_count) {
         return -1;
     }
     
     if (history_count < buffer_size) {
         /* Buffer not yet full - use direct index */
+        if (position >= buffer_size) {
+            return -1;  // Safety check
+        }
         return position;
     }
     
     /* Buffer is full - calculate with wrap-around */
+    // Ensure history_start is within valid range
+    if (history_start >= buffer_size) {
+        return -1;
+    }
+    
     return (history_start + position) % buffer_size;
 }
 
@@ -58,11 +71,16 @@ static ChessGameState get_history_at_position(int position) {
     ChessGameState result;
     memset(&result, 0, sizeof(ChessGameState));
     
+    // Validate history buffer is initialized before access
+    if (!chess_gui.history || chess_gui.history_capacity <= 0) {
+        return result;  // Return empty state if history not initialized
+    }
+    
     int actual_idx = get_circular_index(position, chess_gui.history_size, 
                                          chess_gui.history_start, 
                                          chess_gui.history_capacity);
     
-    if (actual_idx >= 0 && chess_gui.history && actual_idx < chess_gui.history_capacity) {
+    if (actual_idx >= 0 && actual_idx < chess_gui.history_capacity && chess_gui.history) {
         result = chess_gui.history[actual_idx];
     }
     
