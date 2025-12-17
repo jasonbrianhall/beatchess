@@ -340,7 +340,13 @@ static inline MoveHistory chess_get_move_from_history(BeatChessVisualization *ch
  */
 void chess_save_move_history(BeatChessVisualization *chess, ChessMove move, double time_elapsed);
 
-
+int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves);
+int chess_evaluate_position(ChessGameState *game);
+bool chess_is_in_check(ChessGameState *game, ChessColor color);
+int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing);
+void save_position_to_history();
+void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c);
+void undo_move();
 
 
 #endif // BEATCHESS_H

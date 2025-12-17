@@ -18,15 +18,6 @@
 
 ChessGUI chess_gui;
 
-/* Forward declarations */
-extern int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves);
-extern int chess_evaluate_position(ChessGameState *game);
-extern bool chess_is_in_check(ChessGameState *game, ChessColor color);
-extern int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing);
-void save_position_to_history();
-void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c);
-void undo_move();
-
 /* ============================================================================
  * Straight Buffer History Helpers
  * ============================================================================
