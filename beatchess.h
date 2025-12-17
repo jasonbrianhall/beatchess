@@ -302,5 +302,4 @@ void save_position_to_history();
 void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c);
 void undo_move();
 
-
 #endif // BEATCHESS_H

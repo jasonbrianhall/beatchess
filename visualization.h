@@ -40,5 +40,7 @@ void chess_start_thinking(ChessThinkingState *ts, ChessGameState *game);
 ChessMove chess_get_best_move_now(ChessThinkingState *ts);
 void chess_stop_thinking(ChessThinkingState *ts);
 void* chess_think_continuously(void* arg);
-
+void draw_piece(cairo_t *cr, PieceType type, ChessColor color, double x, double y, double size, double dance_offset);
+void draw_chess_flip_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height);
+void draw_chess_undo_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height);
 #endif

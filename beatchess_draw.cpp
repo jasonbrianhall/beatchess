@@ -14,6 +14,67 @@
 
 static bool use_sprites = false;  // Default to geometric shapes
 
+void draw_chess_board(BeatChessVisualization *chess, cairo_t *cr) {
+    double cell = chess->cell_size;
+    double ox = chess->board_offset_x;
+    double oy = chess->board_offset_y;
+    
+    // Draw board squares
+    for (int r = 0; r < BOARD_SIZE; r++) {
+        for (int c = 0; c < BOARD_SIZE; c++) {
+            // Apply board flip transformation if enabled
+            int draw_r = chess->board_flipped ? (BOARD_SIZE - 1 - r) : r;
+            int draw_c = chess->board_flipped ? (BOARD_SIZE - 1 - c) : c;
+            
+            bool is_light = (r + c) % 2 == 0;
+            
+            if (is_light) {
+                cairo_set_source_rgb(cr, 0.9, 0.9, 0.85);
+            } else {
+                cairo_set_source_rgb(cr, 0.4, 0.5, 0.4);
+            }
+            
+            cairo_rectangle(cr, ox + draw_c * cell, oy + draw_r * cell, cell, cell);
+            cairo_fill(cr);
+        }
+    }
+    
+    // Draw coordinates (flipped if needed)
+    cairo_set_source_rgb(cr, 0.7, 0.7, 0.7);
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, cell * 0.2);
+    
+    for (int i = 0; i < 8; i++) {
+        char label[2];
+        
+        if (chess->board_flipped) {
+            // Flipped coordinates
+            // Files (h-a instead of a-h)
+            label[0] = 'h' - i;
+            label[1] = '\0';
+            cairo_move_to(cr, ox + i * cell + cell * 0.05, oy + 8 * cell - cell * 0.05);
+            cairo_show_text(cr, label);
+            
+            // Ranks (1-8 instead of 8-1)
+            label[0] = '1' + i;
+            cairo_move_to(cr, ox + cell * 0.05, oy + i * cell + cell * 0.25);
+            cairo_show_text(cr, label);
+        } else {
+            // Normal coordinates
+            // Files (a-h)
+            label[0] = 'a' + i;
+            label[1] = '\0';
+            cairo_move_to(cr, ox + i * cell + cell * 0.05, oy + 8 * cell - cell * 0.05);
+            cairo_show_text(cr, label);
+            
+            // Ranks (8-1)
+            label[0] = '8' - i;
+            cairo_move_to(cr, ox + cell * 0.05, oy + i * cell + cell * 0.25);
+            cairo_show_text(cr, label);
+        }
+    }
+}
+
 void draw_chess_pvsa_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
     // Button position and size - LEFT SIDE, below RESET button
     double button_width = 120;
