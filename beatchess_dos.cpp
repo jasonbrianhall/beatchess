@@ -619,8 +619,6 @@ ChessMove compute_ai_move() {
     int candidate_count = 0;
     int threshold = 50;  /* 50 centipawns */
     
-    printf("Best score: %d, collecting candidates within %d centipawns\n", best_score, threshold);
-    
     for (int i = 0; i < num_moves; i++) {
         ChessGameState temp = chess_gui.game;
         chess_make_move(&temp, moves[i]);
