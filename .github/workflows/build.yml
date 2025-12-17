@@ -1,0 +1,104 @@
+name: Build Sudoku
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ master, dev ]
+  workflow_dispatch:
+
+env:
+  PRODUCT_VERSION: "1.0.${{ github.run_number }}"
+  UPGRADE_CODE: "E1A85D73-9B2C-4E6D-B3C1-8F0A9D2E5C7B"
+
+jobs:
+  build-msdos:
+    # Skipped on 'windows' branch for faster builds
+    if: github.ref != 'refs/heads/windows'
+    runs-on: ubuntu-latest
+    container: 
+      image: djfdyuruiry/djgpp
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        apt-get update
+        apt-get install -y wget unzip zip
+
+    - name: Download CSDPMI
+      working-directory: msdos
+      run: |
+        wget http://na.mirror.garr.it/mirrors/djgpp/current/v2misc/csdpmi7b.zip
+        unzip -o csdpmi7b.zip -d csdpmi
+
+    - name: Build MS-DOS Version
+      working-directory: msdos
+      run: |
+        g++ beatchess_dos.cpp beatchess.cpp -o beatchss.exe
+        exe2coff beatchss.exe
+        cat csdpmi/bin/CWSDSTUB.EXE beatchss > beatchss.exe
+        
+    - name: Create MS-DOS Distribution
+      working-directory: msdos
+      run: |
+        mkdir beatchess-msdos-v1.0
+        cp beatchss.exe beatchess-msdos-v1.0/
+        
+        echo "Beatchess for MS-DOS
+        Version 1.0
+
+        Installation:
+        1. dosbox beatchss.exe
+
+        Requirements:
+        - MS-DOS or compatible OS
+        - 4MB RAM
+        - VGA or better graphics" > beatchess-msdos-v1.0/README-MSDOS.txt
+        
+        zip -r ../beatchess-msdos.zip beatchess-msdos-v1.0
+
+    - name: Upload MS-DOS Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: msdos-artifacts
+        path: |
+          beatchess-msdos.zip
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: beatchess-windows
+        path: release-artifacts/
+
+  create-release:
+    needs: [build-windows, build-msdos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push' && github.ref != 'refs/heads/windows'
+    
+    steps:
+    - name: Download MSDOS Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: msdos-artifacts
+        path: release
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          release/beatchess-msdos.zip
+        tag_name: ${{ github.ref == 'refs/heads/master' && format('v{0}', github.run_number) || format('dev-v{0}', github.run_number) }}
+        name: ${{ github.ref == 'refs/heads/master' && format('Release {0}', github.run_number) || format('Dev Build {0}', github.run_number) }}
+        draft: false
+        prerelease: ${{ github.ref != 'refs/heads/master' }}
+        body: |
+          **Version:** ${{ needs.build-windows.outputs.version }}
+          **Build:** #${{ github.run_number }}
+                    
+          Built with GitHub Actions
