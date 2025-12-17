@@ -15,6 +15,29 @@
 #include "chess_pieces_loader.h"
 #include "splashscreen.h"
 
+/* ============================================================================
+ * UI Definitions
+ * ============================================================================
+ */
+
+#define BOARD_START_X 60
+#define BOARD_START_Y 80
+#define SQUARE_SIZE 50
+#define BUTTON_PANEL_X 480
+#define BUTTON_PANEL_Y 80
+#define BUTTON_WIDTH 140
+#define BUTTON_HEIGHT 30
+#define BUTTON_SPACING 8
+
+/* Menu bar */
+#define MENU_BAR_HEIGHT 20
+#define MENU_ITEM_WIDTH 80
+
+/* Define custom colors for chess board (green and cream/beige) */
+#define LIGHT_SQUARE 15   /* Light beige/cream color */
+#define DARK_SQUARE 46    /* Dark green color */
+
+
 
 ChessGUI chess_gui;
 
@@ -27,7 +50,19 @@ ChessGUI chess_gui;
  * Retrieve a game state from history at logical position.
  * Uses a straight buffer - no circular wrapping.
  */
-static ChessGameState get_history_at_position(int position) {
+void printToSerial(const char *fmt, ...) {
+    FILE *serial = fopen("COM1", "w");
+    if (!serial) return;
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(serial, fmt, args);
+    va_end(args);
+
+    fclose(serial);
+}
+
+ChessGameState get_history_at_position(int position) {
     ChessGameState result;
     
     /* Clear result by zeroing out board and flags */
@@ -59,29 +94,6 @@ static ChessGameState get_history_at_position(int position) {
     
     return chess_gui.history[position];
 }
-
-/* ============================================================================
- * UI Definitions
- * ============================================================================
- */
-
-#define BOARD_START_X 60
-#define BOARD_START_Y 80
-#define SQUARE_SIZE 50
-#define BUTTON_PANEL_X 480
-#define BUTTON_PANEL_Y 80
-#define BUTTON_WIDTH 140
-#define BUTTON_HEIGHT 30
-#define BUTTON_SPACING 8
-
-/* Menu bar */
-#define MENU_BAR_HEIGHT 20
-#define MENU_ITEM_WIDTH 80
-
-/* Define custom colors for chess board (green and cream/beige) */
-#define LIGHT_SQUARE 15   /* Light beige/cream color */
-#define DARK_SQUARE 46    /* Dark green color */
-
 
 /* Side panel buttons */
 Button side_buttons[] = {
@@ -207,10 +219,7 @@ void init_chess_game() {
     bool saved_ai_vs_ai = chess_gui.ai_vs_ai;
     bool saved_player_is_white = chess_gui.player_is_white;
     int saved_capacity = chess_gui.history_capacity;
-    
-    /* DON'T use memset on the entire structure - it's too large and causes issues */
-    /* Instead, manually reset only the fields we need to reset */
-    
+        
     /* Restore/set saved values first */
     chess_gui.ai_vs_ai = saved_ai_vs_ai;
     chess_gui.player_is_white = saved_player_is_white;
@@ -333,7 +342,6 @@ void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to
     chess_gui.move_history_index++;
     chess_gui.history_size = chess_gui.move_history_index;  /* Keep synchronized */
     chess_gui.move_history_count = chess_gui.history_size;
-    chess_gui.move_count = chess_gui.history_size;
     
     /* Start timer after first move is saved (when we have 2+ positions) */
     if (chess_gui.history_size == 2) {
@@ -341,30 +349,8 @@ void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to
     }
 }
 
-/**
- * Undo the last move(s).
- * In Player vs AI mode, undoes TWO moves (player's move + AI's response)
- * In AI vs AI mode, undoes ONE move
- * 
- * FIXED: Properly calculate restore_index BEFORE modifying history_size,
- * keep move_history_index synchronized, AND restore the visual state (last_move)
- * using stored move information from move_history
- */
-void printToSerial(const char *fmt, ...) {
-    FILE *serial = fopen("COM1", "w");
-    if (!serial) return;
-
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(serial, fmt, args);
-    va_end(args);
-
-    fclose(serial);
-}
-
-
 void undo_move() {
-    printToSerial("In Undo Move\n");
+    //printToSerial("In Undo Move\n");
 
     /* Don't allow undo while AI is computing */
     if (chess_gui.ai_computing) { 
@@ -442,7 +428,7 @@ void undo_move() {
     
     chess_gui.move_history_count = chess_gui.history_size;
     chess_gui.move_history_index = chess_gui.history_size;
-    chess_gui.move_count = chess_gui.history_size;
+    chess_gui.move_count = chess_gui.history_size;  /* Keep move counter synchronized with history */
     
     /* Restore the last move display */
     if (last_move_index > 0 && last_move_index < chess_gui.history_capacity) {
@@ -598,7 +584,7 @@ void show_splash_screen(BITMAP *backbuffer) {
 }
 
 /* AI move computation - standard minimax (no negamax) */
-static ChessMove compute_ai_move() {
+ChessMove compute_ai_move() {
     ChessMove moves[256];
     ChessMove best_move = {-1, -1, -1, -1, 0};
     int num_moves = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, moves);
@@ -743,7 +729,7 @@ void draw_side_panel() {
     textout_ex(screen, font, "Game Info:", BUTTON_PANEL_X, info_y, COLOR_YELLOW, -1);
     
     char buf[64];
-    snprintf(buf, 64, "Move: %d", chess_gui.history_size);
+    snprintf(buf, 64, "Move: %d", chess_gui.move_count);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, info_y + 20, COLOR_WHITE, -1);
     
     const char *turn_str = (chess_gui.game.turn == WHITE) ? "White" : "Black";
@@ -1143,7 +1129,7 @@ int main(void) {
     install_keyboard();
     install_mouse();
     install_timer();
-    
+    init_chess_game();
     /* Seed random number generator with current time for variety in AI moves */
     srand((unsigned int)time(NULL));
     
@@ -1293,6 +1279,7 @@ int main(void) {
                         chess_make_move(&chess_gui.game, ai_move);
                         save_position_to_history_with_move(ai_move.from_row, ai_move.from_col, 
                                                             ai_move.to_row, ai_move.to_col);
+                        chess_gui.move_count++;  /* Increment move counter after move is committed */
                         
                         /* Check for checkmate or stalemate */
                         if (!chess_is_in_check(&chess_gui.game, chess_gui.game.turn)) {
@@ -1744,6 +1731,7 @@ int main(void) {
                                     save_position_to_history_with_move(chess_gui.selected_row, 
                                                                         chess_gui.selected_col,
                                                                         row, col);
+                                    chess_gui.move_count++;  /* Increment move counter after move is committed */
                                     /* Turn is switched by chess_make_move */
                                     chess_gui.ai_move_counter = 0;  /* Reset AI timer */
                                 }
