@@ -14,6 +14,369 @@
 
 static bool use_sprites = false;  // Default to geometric shapes
 
+void draw_chess_pvsa_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    // Button position and size - LEFT SIDE, below RESET button
+    double button_width = 120;
+    double button_height = 40;
+    double button_x = 20;  // LEFT side, same as RESET
+    double button_y = 70;  // Below RESET (20 + 40 + 10 spacing)
+    
+    // Store button position for hit detection
+    chess->pvsa_button_x = button_x;
+    chess->pvsa_button_y = button_y;
+    chess->pvsa_button_width = button_width;
+    chess->pvsa_button_height = button_height;
+    
+    // Background
+    cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_fill(cr);
+    
+    // Glow effect if hovered
+    if (chess->pvsa_button_hovered || chess->pvsa_button_glow > 0) {
+        double glow_alpha = chess->pvsa_button_glow * 0.5;
+        if (chess->pvsa_button_hovered) glow_alpha = 0.4;
+        
+        cairo_set_source_rgba(cr, 1.0, 0.7, 0.2, glow_alpha);
+        cairo_rectangle(cr, button_x - 3, button_y - 3, button_width + 6, button_height + 6);
+        cairo_stroke(cr);
+    }
+    
+    // Border
+    cairo_set_source_rgb(cr, chess->pvsa_button_hovered ? 1.0 : 0.7, 
+                         chess->pvsa_button_hovered ? 0.7 : 0.5, 
+                         chess->pvsa_button_hovered ? 0.2 : 0.3);
+    cairo_set_line_width(cr, 2);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_stroke(cr);
+    
+    // Text - show current mode
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 12);
+    
+    const char *button_text = chess->player_vs_ai ? "P vs AI" : "AI vs AI";
+    
+    cairo_text_extents_t extents;
+    cairo_text_extents(cr, button_text, &extents);
+    
+    double text_x = button_x + (button_width - extents.width) / 2;
+    double text_y = button_y + (button_height + extents.height) / 2;
+    
+    cairo_set_source_rgb(cr, chess->pvsa_button_hovered ? 1.0 : 0.9, 
+                         chess->pvsa_button_hovered ? 0.8 : 0.7, 
+                         chess->pvsa_button_hovered ? 0.3 : 0.4);
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, button_text);
+}
+
+void draw_chess_reset_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    // Button position and size - LEFT SIDE
+    double button_width = 120;
+    double button_height = 40;
+    double button_x = 20;  // LEFT side, 20px from edge
+    double button_y = 20;
+    
+    // Store button position for hit detection
+    chess->reset_button_x = button_x;
+    chess->reset_button_y = button_y;
+    chess->reset_button_width = button_width;
+    chess->reset_button_height = button_height;
+    
+    // Background
+    cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_fill(cr);
+    
+    // Glow effect if hovered
+    if (chess->reset_button_hovered || chess->reset_button_glow > 0) {
+        double glow_alpha = chess->reset_button_glow * 0.5;
+        if (chess->reset_button_hovered) glow_alpha = 0.4;
+        
+        cairo_set_source_rgba(cr, 1.0, 0.7, 0.2, glow_alpha);
+        cairo_rectangle(cr, button_x - 3, button_y - 3, button_width + 6, button_height + 6);
+        cairo_stroke(cr);
+    }
+    
+    // Border
+    cairo_set_source_rgb(cr, chess->reset_button_hovered ? 1.0 : 0.7, 
+                         chess->reset_button_hovered ? 0.7 : 0.5, 
+                         chess->reset_button_hovered ? 0.2 : 0.3);
+    cairo_set_line_width(cr, 2);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_stroke(cr);
+    
+    // Text
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 14);
+    
+    cairo_text_extents_t extents;
+    cairo_text_extents(cr, "RESET", &extents);
+    
+    double text_x = button_x + (button_width - extents.width) / 2;
+    double text_y = button_y + (button_height + extents.height) / 2;
+    
+    cairo_set_source_rgb(cr, chess->reset_button_hovered ? 1.0 : 0.9, 
+                         chess->reset_button_hovered ? 0.8 : 0.7, 
+                         chess->reset_button_hovered ? 0.3 : 0.4);
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, "RESET");
+}
+
+void draw_chess_status(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    // Status text
+    cairo_select_font_face(cr, "Monospace", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 16);
+    
+    cairo_text_extents_t extents;
+    cairo_text_extents(cr, chess->status_text, &extents);
+    
+    double text_x = (width - extents.width) / 2;
+    double text_y = chess->board_offset_y - 20;
+    
+    // Flash background if timer active
+    if (chess->status_flash_timer > 0) {
+        double alpha = chess->status_flash_timer * 0.3;
+        cairo_set_source_rgba(cr, 
+                            chess->status_flash_color[0],
+                            chess->status_flash_color[1],
+                            chess->status_flash_color[2],
+                            alpha);
+        cairo_rectangle(cr, text_x - 10, text_y - extents.height - 5, 
+                       extents.width + 20, extents.height + 10);
+        cairo_fill(cr);
+    }
+    
+    // Text
+    if (chess->status_flash_timer > 0) {
+        cairo_set_source_rgb(cr,
+                           chess->status_flash_color[0],
+                           chess->status_flash_color[1],
+                           chess->status_flash_color[2]);
+    } else {
+        cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+    }
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, chess->status_text);
+    
+    // Move counter
+    char move_text[64];
+    snprintf(move_text, sizeof(move_text), "Move: %d", chess->move_count);
+    cairo_set_source_rgb(cr, 0.7, 0.7, 0.7);
+    cairo_set_font_size(cr, 14);
+    cairo_text_extents(cr, move_text, &extents);
+    cairo_move_to(cr, (width - extents.width) / 2, 
+                  chess->board_offset_y + chess->cell_size * 8 + 30);
+    cairo_show_text(cr, move_text);
+    
+    // Time display (only in Player vs AI mode)
+    if (chess->player_vs_ai) {
+        char time_text[256];
+        
+        // Show current turn's elapsed time prominently
+        double current_time = (chess->game.turn == WHITE) ? chess->current_move_start_time : chess->time_thinking;
+        const char *current_player = (chess->game.turn == WHITE) ? "Your" : "AI";
+        
+        snprintf(time_text, sizeof(time_text), "%s turn: %.1fs | Total - White: %.1fs | Black: %.1fs",
+                current_player, current_time,
+                chess->white_total_time, chess->black_total_time);
+        
+        cairo_set_source_rgb(cr, 1.0, 1.0, 0.0);  // Bright yellow for visibility
+        cairo_set_font_size(cr, 14);  // Larger font
+        cairo_text_extents(cr, time_text, &extents);
+        cairo_move_to(cr, (width - extents.width) / 2, 
+                      chess->board_offset_y + chess->cell_size * 8 + 55);
+        cairo_show_text(cr, time_text);
+    }
+}
+
+void draw_chess_eval_bar(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    double bar_width = 30;
+    double bar_height = chess->cell_size * 8;
+    double bar_x = chess->board_offset_x + chess->cell_size * 8 + 20;
+    double bar_y = chess->board_offset_y;
+    
+    // Background
+    cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
+    cairo_rectangle(cr, bar_x, bar_y, bar_width, bar_height);
+    cairo_fill(cr);
+    
+    // Center line
+    cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
+    cairo_set_line_width(cr, 1);
+    cairo_move_to(cr, bar_x, bar_y + bar_height / 2);
+    cairo_line_to(cr, bar_x + bar_width, bar_y + bar_height / 2);
+    cairo_stroke(cr);
+    
+    // Evaluation position (-1 to 1)
+    double eval_pos = chess->eval_bar_position;
+    double fill_y = bar_y + bar_height / 2 - (eval_pos * bar_height / 2);
+    double fill_height = eval_pos * bar_height / 2;
+    
+    if (eval_pos > 0) {
+        // White advantage
+        cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+        cairo_rectangle(cr, bar_x, fill_y, bar_width, fill_height);
+    } else {
+        // Black advantage
+        cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+        cairo_rectangle(cr, bar_x, bar_y + bar_height / 2, bar_width, -fill_height);
+    }
+    cairo_fill(cr);
+    
+    // Border
+    cairo_set_source_rgb(cr, 0.7, 0.7, 0.7);
+    cairo_set_line_width(cr, 2);
+    cairo_rectangle(cr, bar_x, bar_y, bar_width, bar_height);
+    cairo_stroke(cr);
+}
+
+void draw_chess_pieces(BeatChessVisualization *chess, cairo_t *cr) {
+    double cell = chess->cell_size;
+    double ox = chess->board_offset_x;
+    double oy = chess->board_offset_y;
+    
+    // Draw selection highlight if a piece is selected
+    if (chess->has_selected_piece && chess->selected_piece_row >= 0) {
+        int sel_r = chess->board_flipped ? (BOARD_SIZE - 1 - chess->selected_piece_row) : chess->selected_piece_row;
+        int sel_c = chess->board_flipped ? (BOARD_SIZE - 1 - chess->selected_piece_col) : chess->selected_piece_col;
+        
+        cairo_set_source_rgba(cr, 0.0, 1.0, 1.0, 0.3);  // Cyan highlight
+        cairo_rectangle(cr, 
+                       ox + sel_c * cell, 
+                       oy + sel_r * cell, 
+                       cell, cell);
+        cairo_fill(cr);
+        
+        // Border around selected piece
+        cairo_set_source_rgb(cr, 0.0, 1.0, 1.0);
+        cairo_set_line_width(cr, 3);
+        cairo_rectangle(cr, 
+                       ox + sel_c * cell, 
+                       oy + sel_r * cell, 
+                       cell, cell);
+        cairo_stroke(cr);
+    }
+    
+    // Get volume level from the parent visualizer structure
+    // We need to pass this through from draw_beat_chess
+    Visualizer *vis = (Visualizer*)((char*)chess - offsetof(Visualizer, beat_chess));
+    double volume = vis->volume_level;
+    
+    for (int r = 0; r < BOARD_SIZE; r++) {
+        for (int c = 0; c < BOARD_SIZE; c++) {
+            ChessPiece piece = chess->game.board[r][c];
+            
+            // Skip if animating this piece
+            if (chess->is_animating && 
+                r == chess->animating_from_row && 
+                c == chess->animating_from_col) {
+                continue;
+            }
+            
+            if (piece.type != EMPTY) {
+                // Apply board flip transformation
+                int draw_r = chess->board_flipped ? (BOARD_SIZE - 1 - r) : r;
+                int draw_c = chess->board_flipped ? (BOARD_SIZE - 1 - c) : c;
+                
+                double x = ox + draw_c * cell;
+                double y = oy + draw_r * cell;
+                
+                // Calculate dance offset based on music volume and position
+                double phase = (r * 0.5 + c * 0.3) * 3.14159;  // Different phase for each square
+                double time_wave = sin(chess->time_since_last_move * 10.0 + phase);
+                // Scale dance by volume - pieces bounce more with louder music
+                double dance_amount = time_wave * volume * cell * 0.2;
+                
+                // Draw shadow - dark for all pieces
+                cairo_save(cr);
+                cairo_translate(cr, 3, 3);
+                cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
+                draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
+                cairo_restore(cr);
+                
+                // Draw piece
+                draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
+            }
+        }
+    }
+    
+    // Draw animating piece
+    if (chess->is_animating) {
+        int fr = chess->animating_from_row;
+        int fc = chess->animating_from_col;
+        int tr = chess->animating_to_row;
+        int tc = chess->animating_to_col;
+        
+        // Apply board flip transformation
+        int draw_fr = chess->board_flipped ? (BOARD_SIZE - 1 - fr) : fr;
+        int draw_fc = chess->board_flipped ? (BOARD_SIZE - 1 - fc) : fc;
+        int draw_tr = chess->board_flipped ? (BOARD_SIZE - 1 - tr) : tr;
+        int draw_tc = chess->board_flipped ? (BOARD_SIZE - 1 - tc) : tc;
+        
+        ChessPiece piece = chess->game.board[tr][tc];
+        
+        // Smooth interpolation
+        double t = chess->animation_progress;
+        t = t * t * (3.0 - 2.0 * t); // Smoothstep
+        
+        double x = ox + (draw_fc + t * (draw_tc - draw_fc)) * cell;
+        double y = oy + (draw_fr + t * (draw_tr - draw_fr)) * cell;
+        
+        // Animating piece dances even more to the music
+        double dance_amount = sin(chess->time_since_last_move * 15.0) * volume * cell * 0.3;
+        
+        // Draw shadow - dark for all pieces
+        cairo_save(cr);
+        cairo_translate(cr, 3, 3);
+        cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
+        draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
+        cairo_restore(cr);
+        
+        // Draw piece with slight glow
+        cairo_save(cr);
+        if (piece.color == WHITE) {
+            cairo_set_source_rgb(cr, 1.0, 1.0, 0.9);
+        } else {
+            // Brighter gold glow for animating gold pieces
+            cairo_set_source_rgb(cr, 0.95, 0.75, 0.2);
+        }
+        draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
+        cairo_restore(cr);
+    }
+}
+
+void draw_chess_last_move_highlight(BeatChessVisualization *chess, cairo_t *cr) {
+    if (chess->last_from_row < 0 || chess->last_move_glow <= 0) return;
+    
+    double cell = chess->cell_size;
+    double ox = chess->board_offset_x;
+    double oy = chess->board_offset_y;
+    
+    double alpha = chess->last_move_glow * 0.5;
+    
+    // Transform coordinates if board is flipped
+    int from_row = chess->board_flipped ? (BOARD_SIZE - 1 - chess->last_from_row) : chess->last_from_row;
+    int from_col = chess->board_flipped ? (BOARD_SIZE - 1 - chess->last_from_col) : chess->last_from_col;
+    int to_row = chess->board_flipped ? (BOARD_SIZE - 1 - chess->last_to_row) : chess->last_to_row;
+    int to_col = chess->board_flipped ? (BOARD_SIZE - 1 - chess->last_to_col) : chess->last_to_col;
+    
+    // Highlight from square
+    cairo_set_source_rgba(cr, 1.0, 1.0, 0.0, alpha);
+    cairo_rectangle(cr, 
+                    ox + from_col * cell, 
+                    oy + from_row * cell, 
+                    cell, cell);
+    cairo_fill(cr);
+    
+    // Highlight to square
+    cairo_set_source_rgba(cr, 1.0, 1.0, 0.0, alpha);
+    cairo_rectangle(cr, 
+                    ox + to_col * cell, 
+                    oy + to_row * cell, 
+                    cell, cell);
+    cairo_fill(cr);
+}
+
 void set_rendering_mode(bool sprites) {
     use_sprites = sprites;
 }
