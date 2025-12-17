@@ -19,15 +19,13 @@
 #define BOARD_SIZE 8
 #define MAX_CHESS_DEPTH 10
 #define BEAT_HISTORY_SIZE 10
-#define MAX_MOVE_HISTORY 256
 #define MAX_MOVES_BEFORE_DRAW 300
+#define MAX_MOVE_HISTORY (2 * MAX_MOVES_BEFORE_DRAW)  /* 600 - straight buffer, 2x moves before stalemate */
 /* ============================================================================
- * Circular Buffer Macros for Move History
+ * Straight Buffer Macros for Move History (no circular wrapping)
  * ============================================================================
  */
-#define MOVE_HISTORY_NEXT(idx) (((idx) + 1) % MAX_MOVE_HISTORY)
-#define MOVE_HISTORY_PREV(idx) (((idx) - 1 + MAX_MOVE_HISTORY) % MAX_MOVE_HISTORY)
-#define MOVE_HISTORY_AT(buffer, idx) ((buffer)[(idx) % MAX_MOVE_HISTORY])
+#define MOVE_HISTORY_AT(buffer, idx) ((buffer)[(idx)])
 #define MOVE_HISTORY_IS_FULL(count) ((count) >= MAX_MOVE_HISTORY)
 
 typedef enum { EMPTY, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING } PieceType;
@@ -231,12 +229,11 @@ typedef struct {
     int last_move_to_row, last_move_to_col;
     bool has_last_move;
     
-    /* History - dynamic allocation with circular buffer support */
+    /* History - straight buffer (no circular wrapping) */
     ChessGameState *history;
-    MoveHistory *move_history;     /* Use MoveHistory like GTK version for timing info */
-    int history_size;           /* Number of moves currently in buffer (0 to capacity) */
-    int history_capacity;       /* Maximum buffer size */
-    int history_start;          /* Index of oldest move (for circular buffer) */
+    MoveHistory *move_history;     /* Use MoveHistory for timing info */
+    int history_size;              /* Number of moves currently in buffer (0 to MAX_MOVE_HISTORY) */
+    int history_capacity;          /* Buffer capacity (should be MAX_MOVE_HISTORY) */
     
     /* UI state */
     bool show_help;
@@ -300,62 +297,44 @@ void chess_make_move(ChessGameState *game, ChessMove move);
  */
 
 /**
- * Get the actual index in the circular buffer for a given move position.
- * @param move_position Position in history (0 = oldest available, MAX_MOVE_HISTORY-1 = newest)
+ * Get the actual index in the straight buffer for a given move position.
+ * @param move_position Position in history (0 = oldest, MAX_MOVE_HISTORY-1 = newest)
  * @param move_count Total number of moves ever made
- * @return Actual index in the circular buffer array
+ * @return Actual index in the straight buffer array (or -1 if invalid)
  */
 static inline int chess_get_history_index(int move_position, int move_count) {
     // Validate inputs to prevent integer overflow
     if (move_position < 0 || move_count < 0) {
-        return 0;  // Invalid state
+        return -1;  // Invalid state
     }
     
-    if (move_count <= MAX_MOVE_HISTORY) {
-        return move_position;
+    if (move_position >= move_count || move_position >= MAX_MOVE_HISTORY) {
+        return -1;
     }
-    return (move_count - MAX_MOVE_HISTORY + move_position) % MAX_MOVE_HISTORY;
+    
+    // Straight buffer - no wrapping
+    return move_position;
 }
 
 /**
- * Get a move from history at a given position (0 = oldest available, newest = count-1)
+ * Get a move from history at a given position (0 = oldest, count-1 = newest)
+ * Uses a straight buffer - no circular wrapping
  */
 static inline MoveHistory chess_get_move_from_history(BeatChessVisualization *chess, int position) {
     MoveHistory empty;
     memset(&empty, 0, sizeof(MoveHistory));
     
     // Validate inputs
-    if (!chess || position < 0 || chess->move_history_count < 0) {
+    if (!chess || position < 0 || chess->move_history_count <= 0) {
         return empty;
     }
     
-    if (position >= chess->move_history_count) {
+    if (position >= chess->move_history_count || position >= MAX_MOVE_HISTORY) {
         return empty;
     }
     
-    // If we have fewer moves than buffer size, just use position directly
-    if (chess->move_history_count <= MAX_MOVE_HISTORY) {
-        if (position < 0 || position >= MAX_MOVE_HISTORY) {
-            return empty;
-        }
-        return chess->move_history[position];
-    }
-    
-    // Otherwise, calculate actual index from circular buffer
-    // Cap move_count to prevent overflow
-    int effective_count = (chess->move_history_count > MAX_MOVE_HISTORY) ? 
-                          MAX_MOVE_HISTORY : chess->move_history_count;
-    
-    int start_index = (chess->move_history_index + MAX_MOVE_HISTORY - 
-                      (effective_count % MAX_MOVE_HISTORY)) % MAX_MOVE_HISTORY;
-    int actual_index = (start_index + position) % MAX_MOVE_HISTORY;
-    
-    // Final bounds check
-    if (actual_index < 0 || actual_index >= MAX_MOVE_HISTORY) {
-        return empty;
-    }
-    
-    return chess->move_history[actual_index];
+    // Straight buffer - just use position directly
+    return chess->move_history[position];
 }
 
 /**

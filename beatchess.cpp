@@ -770,15 +770,17 @@ ChessGameStatus chess_check_game_status(ChessGameState *game) {
 // ============================================================================
 
 void chess_save_move_history(BeatChessVisualization *chess, ChessMove move, double time_spent) {
-    // Store move at current index position
-    chess->move_history[chess->move_history_index].game_state = chess->game;
-    chess->move_history[chess->move_history_index].move = move;
-    chess->move_history[chess->move_history_index].time_elapsed = time_spent;
+    // Don't save if buffer is full - prevent overflow
+    if (chess->move_history_count >= MAX_MOVE_HISTORY) {
+        return;
+    }
     
-    // Advance write position (wraps around)
-    chess->move_history_index = MOVE_HISTORY_NEXT(chess->move_history_index);
+    // Store move at current position (straight buffer, no wrapping)
+    chess->move_history[chess->move_history_count].game_state = chess->game;
+    chess->move_history[chess->move_history_count].move = move;
+    chess->move_history[chess->move_history_count].time_elapsed = time_spent;
     
-    // Increment total move count (never wraps, used to track how many moves total)
+    // Increment move count (linear, no wrapping)
     chess->move_history_count++;
 }
 
@@ -808,51 +810,62 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
     // So we go back 2 moves in history
     
     if (chess->move_history_count >= 2) {
-        // Get the last two moves using the helper function
-        MoveHistory *player_move = &MOVE_HISTORY_AT(chess->move_history, chess->move_history_count - 2);
-        MoveHistory *ai_move = &MOVE_HISTORY_AT(chess->move_history, chess->move_history_count - 1);
+        // Get the last two moves using straight buffer indexing
+        int player_move_idx = chess->move_history_count - 2;
+        int ai_move_idx = chess->move_history_count - 1;
         
-        // Restore to the state BEFORE the player's move
-        // We need to go back 3 moves worth: to before the previous AI move
-        if (chess->move_history_count >= 3) {
-            chess->game = MOVE_HISTORY_AT(chess->move_history, chess->move_history_count - 3).game_state;
-        } else {
-            // Only 2 moves in history - this was the first exchange
-            // Go back to starting position
-            chess_init_board(&chess->game);
+        if (player_move_idx >= 0 && player_move_idx < MAX_MOVE_HISTORY &&
+            ai_move_idx >= 0 && ai_move_idx < MAX_MOVE_HISTORY) {
+            
+            MoveHistory *player_move = &chess->move_history[player_move_idx];
+            MoveHistory *ai_move = &chess->move_history[ai_move_idx];
+            
+            // Restore to the state BEFORE the player's move
+            // We need to go back 3 moves worth: to before the previous AI move
+            if (chess->move_history_count >= 3) {
+                int restore_idx = chess->move_history_count - 3;
+                if (restore_idx >= 0 && restore_idx < MAX_MOVE_HISTORY) {
+                    chess->game = chess->move_history[restore_idx].game_state;
+                } else {
+                    chess_init_board(&chess->game);
+                }
+            } else {
+                // Only 2 moves in history - this was the first exchange
+                // Go back to starting position
+                chess_init_board(&chess->game);
+            }
+            
+            // Subtract times from totals (using correct colors)
+            if (player_color == WHITE) {
+                chess->white_total_time -= player_move->time_elapsed;
+            } else {
+                chess->black_total_time -= player_move->time_elapsed;
+            }
+            
+            if (ai_color == WHITE) {
+                chess->white_total_time -= ai_move->time_elapsed;
+            } else {
+                chess->black_total_time -= ai_move->time_elapsed;
+            }
+            
+            if (chess->white_total_time < 0) chess->white_total_time = 0;
+            if (chess->black_total_time < 0) chess->black_total_time = 0;
+            
+            // Remove the 2 moves from history count
+            chess->move_history_count -= 2;
+            
+            snprintf(chess->status_text, sizeof(chess->status_text),
+                    "Moves undone - your turn to play again");
+            chess->status_flash_color[0] = 0.2;
+            chess->status_flash_color[1] = 0.8;
+            chess->status_flash_color[2] = 1.0;
         }
-        
-        // Subtract times from totals (using correct colors)
-        if (player_color == WHITE) {
-            chess->white_total_time -= player_move->time_elapsed;
-        } else {
-            chess->black_total_time -= player_move->time_elapsed;
-        }
-        
-        if (ai_color == WHITE) {
-            chess->white_total_time -= ai_move->time_elapsed;
-        } else {
-            chess->black_total_time -= ai_move->time_elapsed;
-        }
-        
-        if (chess->white_total_time < 0) chess->white_total_time = 0;
-        if (chess->black_total_time < 0) chess->black_total_time = 0;
-        
-        // Remove the 2 moves from history count
-        chess->move_history_count -= 2;
-        // Note: move_history_index stays as is - circular buffer naturally handles this
-        
-        snprintf(chess->status_text, sizeof(chess->status_text),
-                "Moves undone - your turn to play again");
-        chess->status_flash_color[0] = 0.2;
-        chess->status_flash_color[1] = 0.8;
-        chess->status_flash_color[2] = 1.0;
     } else if (chess->move_history_count == 1) {
         // Only player's opening move - undo it
         chess_init_board(&chess->game);
         
         // Subtract time for player's move (using correct color)
-        MoveHistory *first_move = &MOVE_HISTORY_AT(chess->move_history, 0);
+        MoveHistory *first_move = &chess->move_history[0];
         if (player_color == WHITE) {
             chess->white_total_time -= first_move->time_elapsed;
         } else {
