@@ -51,7 +51,7 @@ jobs:
         - 4MB RAM
         - VGA or better graphics" > beatchess-msdos-v1.0/README-MSDOS.txt
         
-        zip -r ../beatchess-msdos.zip beatchess-msdos-v1.0
+        zip -r beatchess-msdos.zip beatchess-msdos-v1.0
 
     - name: Upload MS-DOS Artifacts
       uses: actions/upload-artifact@v4
