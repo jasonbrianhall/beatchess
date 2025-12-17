@@ -1,8 +1,3 @@
-/*
- * beatchess_dos_enhanced.cpp - BeatChess DOS/Allegro 4 with Menu System
- * Enhanced version with File menu and side buttons
- */
-
 #include <allegro.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -872,11 +867,56 @@ int main(void) {
     printf("Displaying splash screen...\n");
     show_splash_screen(backbuffer);
     
-    /* Initialize game */
-    memset(&chess_gui, 0, sizeof(ChessGUI));  /* Zero out the structure */
-    init_chess_game();
+    /* Initialize game - manually set all fields instead of using memset */
+    /* Board state */
+    chess_gui.selected_row = -1;
+    chess_gui.selected_col = -1;
+    chess_gui.piece_selected_row = -1;
+    chess_gui.piece_selected_col = -1;
+    chess_gui.piece_selected = false;
+    chess_gui.last_move_from_row = -1;
+    chess_gui.last_move_from_col = -1;
+    chess_gui.last_move_to_row = -1;
+    chess_gui.last_move_to_col = -1;
+    chess_gui.has_last_move = false;
+    
+    /* History */
+    chess_gui.history = NULL;
+    chess_gui.history_size = 0;
+    chess_gui.history_capacity = 0;
+    
+    /* UI state */
+    chess_gui.show_help = false;
+    chess_gui.show_about = false;
+    chess_gui.show_menu = false;
+    chess_gui.menu_selected = -1;
     chess_gui.ai_vs_ai = false;
     chess_gui.player_is_white = true;
+    
+    /* AI state */
+    chess_gui.ai_move_delay = 15;
+    chess_gui.ai_move_counter = 0;
+    chess_gui.ai_thinking = false;
+    chess_gui.ai_computing = false;
+    chess_gui.ai_best_move.from_row = -1;
+    chess_gui.ai_best_move.from_col = -1;
+    chess_gui.ai_best_move.to_row = -1;
+    chess_gui.ai_best_move.to_col = -1;
+    chess_gui.ai_best_move.score = 0;
+    chess_gui.ai_search_depth = 0;
+    chess_gui.ai_total_moves = 0;
+    chess_gui.ai_evaluated_moves = 0;
+    
+    /* Timer state */
+    chess_gui.white_time_seconds = 0;
+    chess_gui.white_time_frames = 0;
+    chess_gui.black_time_seconds = 0;
+    chess_gui.black_time_frames = 0;
+    chess_gui.timer_started = false;
+    chess_gui.ai_thinking_start_time = 0;
+    
+    /* Initialize the game board and state */
+    init_chess_game();
     
     bool running = true;
     int prev_mouse_b = 0;  /* Track previous mouse button state */
