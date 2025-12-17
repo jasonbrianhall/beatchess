@@ -605,8 +605,8 @@ void* chess_think_continuously(void* arg) {
         
         //printf("THINK: Starting search for %s, %d legal moves\n",  game_copy.turn == WHITE ? "WHITE" : "BLACK", move_count);
         
-        // Iterative deepening - LIMITED TO DEPTH 4
-        for (int depth = 1; depth <= 4; depth++) {
+        // Iterative deepening - uses MAX_CHESS_DEPTH for configurable search depth
+        for (int depth = 1; depth <= MAX_CHESS_DEPTH; depth++) {
             ChessMove best_moves[256];
             int best_move_count = 0;
             int best_score = (game_copy.turn == WHITE) ? INT_MIN : INT_MAX;
