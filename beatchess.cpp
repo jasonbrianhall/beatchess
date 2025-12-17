@@ -844,7 +844,8 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
         chess->move_history_count -= 2;
         // Note: move_history_index stays as is - circular buffer naturally handles this
         
-        strcpy(chess->status_text, "Moves undone - your turn to play again");
+        snprintf(chess->status_text, sizeof(chess->status_text),
+                "Moves undone - your turn to play again");
         chess->status_flash_color[0] = 0.2;
         chess->status_flash_color[1] = 0.8;
         chess->status_flash_color[2] = 1.0;
@@ -866,7 +867,8 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
         chess->move_history_count = 0;
         chess->move_history_index = 0;
         
-        strcpy(chess->status_text, "Opening move undone - try again");
+        snprintf(chess->status_text, sizeof(chess->status_text),
+                "Opening move undone - try again");
         chess->status_flash_color[0] = 0.2;
         chess->status_flash_color[1] = 0.8;
         chess->status_flash_color[2] = 1.0;
@@ -924,7 +926,8 @@ void init_beat_chess_system(void *vis_ptr) {
     chess->is_animating = false;
     chess->animation_progress = 0;
     
-    strcpy(chess->status_text, "Game started - White to move");
+    snprintf(chess->status_text, sizeof(chess->status_text),
+            "Game started - White to move");
     chess->status_flash_timer = 0;
     chess->status_flash_color[0] = 1.0;
     chess->status_flash_color[1] = 1.0;
@@ -1109,7 +1112,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
         chess->is_checkmate = false;
         chess->is_stalemate = false;
         
-        strcpy(chess->status_text, "Game Reset! White to move");
+        snprintf(chess->status_text, sizeof(chess->status_text), "Game Reset! White to move");
         chess->status_flash_color[0] = 0.2;
         chess->status_flash_color[1] = 0.8;
         chess->status_flash_color[2] = 1.0;
@@ -1159,12 +1162,12 @@ void update_beat_chess(void *vis_ptr, double dt) {
         chess->last_from_row = -1;
         
         if (chess->player_vs_ai) {
-            strcpy(chess->status_text, "Player vs AI - White (player) to move");
+            snprintf(chess->status_text, sizeof(chess->status_text), "Player vs AI - White (player) to move");
             chess->status_flash_color[0] = 0.2;
             chess->status_flash_color[1] = 0.8;
             chess->status_flash_color[2] = 1.0;
         } else {
-            strcpy(chess->status_text, "AI vs AI - Game started!");
+            snprintf(chess->status_text, sizeof(chess->status_text), "AI vs AI - Game started!");
             chess->status_flash_color[0] = 1.0;
             chess->status_flash_color[1] = 0.65;
             chess->status_flash_color[2] = 0.0;
@@ -1263,12 +1266,12 @@ void update_beat_chess(void *vis_ptr, double dt) {
             
             // Update status text
             if (chess->board_flipped) {
-                strcpy(chess->status_text, "Playing as BLACK - AI plays WHITE");
+                snprintf(chess->status_text, sizeof(chess->status_text), "Playing as BLACK - AI plays WHITE");
                 chess->status_flash_color[0] = 0.9;
                 chess->status_flash_color[1] = 0.9;
                 chess->status_flash_color[2] = 0.2;
             } else {
-                strcpy(chess->status_text, "Playing as WHITE - AI plays BLACK");
+                snprintf(chess->status_text, sizeof(chess->status_text), "Playing as WHITE - AI plays BLACK");
                 chess->status_flash_color[0] = 0.2;
                 chess->status_flash_color[1] = 0.8;
                 chess->status_flash_color[2] = 1.0;
@@ -1333,7 +1336,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                     chess->selected_piece_row = mouse_row;
                     chess->selected_piece_col = mouse_col;
                     chess->has_selected_piece = true;
-                    strcpy(chess->status_text, "Piece selected - click destination");
+                    snprintf(chess->status_text, sizeof(chess->status_text), "Piece selected - click destination");
                 }
             } else {
                 // Second click: try to move to destination
@@ -1346,7 +1349,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 if (from_row == to_row && from_col == to_col) {
                     // Same square - deselect piece
                     chess->has_selected_piece = false;
-                    strcpy(chess->status_text, "Piece deselected");
+                    snprintf(chess->status_text, sizeof(chess->status_text), "Piece deselected");
                 } else {
                     // Try to move
                     if (chess_is_valid_move(&chess->game, from_row, from_col, to_row, to_col)) {
@@ -1387,9 +1390,9 @@ void update_beat_chess(void *vis_ptr, double dt) {
                             // Show whose turn it is now (AI's color)
                             ChessColor ai_color = chess->board_flipped ? WHITE : BLACK;
                             if (ai_color == WHITE) {
-                                strcpy(chess->status_text, "White (AI) thinking...");
+                                snprintf(chess->status_text, sizeof(chess->status_text), "White (AI) thinking...");
                             } else {
-                                strcpy(chess->status_text, "Black (AI) thinking...");
+                                snprintf(chess->status_text, sizeof(chess->status_text), "Black (AI) thinking...");
                             }
                             chess->move_count++;
                             chess->time_since_last_move = 0;
@@ -1406,21 +1409,21 @@ void update_beat_chess(void *vis_ptr, double dt) {
                                 chess->last_move_end_time = 0.0;
 
                                 if (chess->status == CHESS_CHECKMATE_WHITE) {
-                                    strcpy(chess->status_text, "Checkmate! Black wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! Black wins!");
                                     chess->status_flash_color[0] = 0.85;
                                     chess->status_flash_color[1] = 0.65;
                                     chess->status_flash_color[2] = 0.13;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else if (chess->status == CHESS_CHECKMATE_BLACK) {
-                                    strcpy(chess->status_text, "Checkmate! White wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! White wins!");
                                     chess->status_flash_color[0] = 1.0;
                                     chess->status_flash_color[1] = 1.0;
                                     chess->status_flash_color[2] = 1.0;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else {
-                                    strcpy(chess->status_text, "Stalemate!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Stalemate!");
                                     chess->status_flash_color[0] = 0.7;
                                     chess->status_flash_color[1] = 0.7;
                                     chess->status_flash_color[2] = 0.7;
@@ -1440,12 +1443,12 @@ void update_beat_chess(void *vis_ptr, double dt) {
                             chess->selected_piece_col = -1;
                         } else {
                             // Move would leave king in check - invalid
-                            strcpy(chess->status_text, "Illegal move - king in check");
+                            snprintf(chess->status_text, sizeof(chess->status_text), "Illegal move - king in check");
                             chess->has_selected_piece = false;
                         }
                     } else {
                         // Invalid move
-                        strcpy(chess->status_text, "Illegal move");
+                        snprintf(chess->status_text, sizeof(chess->status_text), "Illegal move");
                         chess->has_selected_piece = false;
                     }
                 }
@@ -1508,7 +1511,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                     chess->eval_bar_position = 0;
                     chess->eval_bar_target = 0;
                     chess->time_thinking = 0;
-                    strcpy(chess->status_text, "New game! White to move");
+                    snprintf(chess->status_text, sizeof(chess->status_text), "New game! White to move");
                     chess->status_flash_color[0] = 0.0;
                     chess->status_flash_color[1] = 1.0;
                     chess->status_flash_color[2] = 1.0;
