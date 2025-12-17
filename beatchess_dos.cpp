@@ -51,6 +51,7 @@ typedef struct {
     
     /* Board state */
     int selected_row, selected_col;
+    int piece_selected_row, piece_selected_col;  /* Track where piece was selected from */
     bool piece_selected;
     int last_move_from_row, last_move_from_col;
     int last_move_to_row, last_move_to_col;
@@ -197,6 +198,8 @@ static void init_chess_game() {
     /* Reset UI state */
     chess_gui.selected_row = -1;
     chess_gui.selected_col = -1;
+    chess_gui.piece_selected_row = -1;
+    chess_gui.piece_selected_col = -1;
     chess_gui.piece_selected = false;
     chess_gui.last_move_from_row = -1;
     chess_gui.last_move_from_col = -1;
@@ -627,6 +630,11 @@ static void draw_board() {
             /* Highlight selected square (overrides last move highlight) */
             if (chess_gui.piece_selected && chess_gui.selected_row == y && chess_gui.selected_col == x) {
                 color = COLOR_YELLOW;  /* Yellow highlight for selected piece */
+            }
+            
+            /* Highlight cursor position for keyboard navigation */
+            if (!chess_gui.piece_selected && chess_gui.selected_row == y && chess_gui.selected_col == x) {
+                color = COLOR_MAGENTA;  /* Magenta highlight for cursor position */
             }
             
             rectfill(screen, screen_x, screen_y, screen_x + SQUARE_SIZE - 1, screen_y + SQUARE_SIZE - 1, color);
@@ -1092,6 +1100,7 @@ int main(void) {
         if (keypressed()) {
             int key = readkey();
             int key_code = key & 0xFF;
+            int key_scancode = key >> 8;  /* Get extended key code for arrow keys */
             
             /* If showing help, any key returns to game */
             if (chess_gui.show_help) {
@@ -1105,10 +1114,168 @@ int main(void) {
                 continue;
             }
             
+            /* Handle board navigation with arrow keys and WASD */
+            if (!ai_should_move) {
+                /* Arrow keys and WASD for movement */
+                bool is_movement = false;
+                switch (key_scancode) {
+                    case KEY_UP:
+                        if (chess_gui.selected_row > 0) {
+                            chess_gui.selected_row--;
+                        } else {
+                            chess_gui.selected_row = 0;
+                        }
+                        is_movement = true;
+                        break;
+                        
+                    case KEY_DOWN:
+                        if (chess_gui.selected_row < 7) {
+                            chess_gui.selected_row++;
+                        } else {
+                            chess_gui.selected_row = 7;
+                        }
+                        is_movement = true;
+                        break;
+                        
+                    case KEY_LEFT:
+                        if (chess_gui.selected_col > 0) {
+                            chess_gui.selected_col--;
+                        } else {
+                            chess_gui.selected_col = 0;
+                        }
+                        is_movement = true;
+                        break;
+                        
+                    case KEY_RIGHT:
+                        if (chess_gui.selected_col < 7) {
+                            chess_gui.selected_col++;
+                        } else {
+                            chess_gui.selected_col = 7;
+                        }
+                        is_movement = true;
+                        break;
+                }
+                
+                /* WASD movement (check ASCII for W/A/S/D) */
+                if (!is_movement) {
+                    switch (key_code) {
+                        case 'w':
+                        case 'W':
+                            if (chess_gui.selected_row > 0) {
+                                chess_gui.selected_row--;
+                            } else {
+                                chess_gui.selected_row = 0;
+                            }
+                            is_movement = true;
+                            break;
+                            
+                        case 's':
+                        case 'S':
+                            if (chess_gui.selected_row < 7) {
+                                chess_gui.selected_row++;
+                            } else {
+                                chess_gui.selected_row = 7;
+                            }
+                            is_movement = true;
+                            break;
+                            
+                        case 'a':
+                        case 'A':
+                            if (chess_gui.selected_col > 0) {
+                                chess_gui.selected_col--;
+                            } else {
+                                chess_gui.selected_col = 0;
+                            }
+                            is_movement = true;
+                            break;
+                            
+                        case 'd':
+                        case 'D':
+                            if (chess_gui.selected_col < 7) {
+                                chess_gui.selected_col++;
+                            } else {
+                                chess_gui.selected_col = 7;
+                            }
+                            is_movement = true;
+                            break;
+                    }
+                }
+                
+                if (is_movement) {
+                    continue;  /* Skip further key processing */
+                }
+            }
+            
+            /* Initialize cursor position on first movement key */
+            if (chess_gui.selected_row < 0 && (key_scancode == KEY_UP || key_scancode == KEY_DOWN ||
+                                                key_scancode == KEY_LEFT || key_scancode == KEY_RIGHT ||
+                                                key_code == 'w' || key_code == 'W' ||
+                                                key_code == 'a' || key_code == 'A' ||
+                                                key_code == 's' || key_code == 'S' ||
+                                                key_code == 'd' || key_code == 'D')) {
+                chess_gui.selected_row = 0;
+                chess_gui.selected_col = 0;
+                continue;
+            }
+            
+            /* Handle Enter key for selection/movement */
+            if (key_code == 13) {  /* Enter key */
+                if (!ai_should_move && chess_gui.selected_row >= 0) {
+                    ChessPiece piece = chess_gui.game.board[chess_gui.selected_row][chess_gui.selected_col];
+                    
+                    if (!chess_gui.piece_selected && piece.type != EMPTY && 
+                        piece.color == chess_gui.game.turn) {
+                        /* Select piece - remember where it was selected from */
+                        chess_gui.piece_selected_row = chess_gui.selected_row;
+                        chess_gui.piece_selected_col = chess_gui.selected_col;
+                        chess_gui.piece_selected = true;
+                    } else if (chess_gui.piece_selected) {
+                        /* Try to move piece from selected position to current position */
+                        if (chess_is_valid_move(&chess_gui.game,
+                                               chess_gui.piece_selected_row,
+                                               chess_gui.piece_selected_col,
+                                               chess_gui.selected_row,
+                                               chess_gui.selected_col)) {
+                            
+                            ChessGameState temp = chess_gui.game;
+                            ChessMove move = {chess_gui.piece_selected_row,
+                                             chess_gui.piece_selected_col,
+                                             chess_gui.selected_row,
+                                             chess_gui.selected_col, 0};
+                            chess_make_move(&temp, move);
+                            
+                            if (!chess_is_in_check(&temp, chess_gui.game.turn)) {
+                                chess_gui.last_move_from_row = chess_gui.piece_selected_row;
+                                chess_gui.last_move_from_col = chess_gui.piece_selected_col;
+                                chess_gui.last_move_to_row = chess_gui.selected_row;
+                                chess_gui.last_move_to_col = chess_gui.selected_col;
+                                chess_gui.has_last_move = true;
+                                
+                                chess_make_move(&chess_gui.game, move);
+                                save_position_to_history();
+                                chess_gui.ai_move_counter = 0;
+                            }
+                        }
+                        
+                        chess_gui.piece_selected = false;
+                        chess_gui.piece_selected_row = -1;
+                        chess_gui.piece_selected_col = -1;
+                    }
+                }
+                continue;
+            }
+            
+            /* Handle ESC to deselect piece or cancel */
+            if (key_code == 27) {  /* ESC */
+                chess_gui.piece_selected = false;
+                chess_gui.piece_selected_row = -1;
+                chess_gui.piece_selected_col = -1;
+                continue;
+            }
+            
             switch (key_code) {
                 case 'q':
                 case 'Q':
-                case 27:  /* ESC */
                     running = false;
                     break;
                     
@@ -1121,12 +1288,6 @@ int main(void) {
                 case 'u':
                 case 'U':
                     undo_move();
-                    chess_gui.ai_move_counter = 0;
-                    break;
-                    
-                case 'a':
-                case 'A':
-                    chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai;
                     chess_gui.ai_move_counter = 0;
                     break;
                     
