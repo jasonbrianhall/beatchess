@@ -693,21 +693,69 @@ int chess_evaluate_position(ChessGameState *game) {
         }
     }
     
-    // Development bonus - knights/bishops away from starting squares
+    // ROOK ACTIVITY - rooks should stay put until endgame
+    // Count material to determine game phase
+    int material_count = 0;
     for (int r = 0; r < 8; r++) {
         for (int c = 0; c < 8; c++) {
             ChessPiece p = game->board[r][c];
-            if (p.type == KNIGHT || p.type == BISHOP) {
-                bool on_start = false;
-                if (p.color == WHITE && r == 7 && (c == 1 || c == 2 || c == 5 || c == 6)) {
-                    on_start = true;
-                } else if (p.color == BLACK && r == 0 && (c == 1 || c == 2 || c == 5 || c == 6)) {
-                    on_start = true;
+            if (p.type != EMPTY && p.type != KING && p.type != PAWN) {
+                material_count += 1;
+            }
+        }
+    }
+    
+    // If still in opening/mid-game (lots of pieces), penalize rooks not on back rank
+    if (material_count > 8) {  // Endgame when few pieces left
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 8; c++) {
+                ChessPiece p = game->board[r][c];
+                if (p.type == ROOK) {
+                    // Rook should be on back rank (row 7 for white, row 0 for black)
+                    bool on_back_rank = (p.color == WHITE && r == 7) || (p.color == BLACK && r == 0);
+                    
+                    if (!on_back_rank) {
+                        int rook_penalty = 20;  // 20 centipawn penalty for moving rook early
+                        score += (p.color == WHITE) ? -rook_penalty : rook_penalty;
+                    }
                 }
+            }
+        }
+    }
+    
+    // KING SAFETY - penalize moving king when not in check
+    // Kings should stay safe, not wander around
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.type == KING) {
+                // Check if king is in check
+                bool in_check = chess_is_in_check(game, p.color);
                 
-                if (!on_start) {
-                    int dev_bonus = 10;
-                    score += (p.color == WHITE) ? dev_bonus : -dev_bonus;
+                if (!in_check) {
+                    // King not in check - check if it's on a safe square
+                    // Safe squares: castled position (g1, c1, g8, c8) or center-ish position
+                    bool safe_square = false;
+                    
+                    // White king safe positions
+                    if (p.color == WHITE) {
+                        if ((r == 7 && (c == 6 || c == 2)) ||  // Castled positions
+                            (r == 6 && (c >= 1 && c <= 6))) {   // Back rank area
+                            safe_square = true;
+                        }
+                    } else {
+                        // Black king safe positions
+                        if ((r == 0 && (c == 6 || c == 2)) ||  // Castled positions
+                            (r == 1 && (c >= 1 && c <= 6))) {   // Back rank area
+                            safe_square = true;
+                        }
+                    }
+                    
+                    // Penalty for king in exposed position
+                    if (!safe_square) {
+                        int exposure_penalty = 30;  // 30 centipawn penalty
+                        score += (p.color == WHITE) ? -exposure_penalty : exposure_penalty;
+                    }
                 }
             }
         }
