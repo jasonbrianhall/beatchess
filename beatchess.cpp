@@ -693,6 +693,112 @@ int chess_evaluate_position(ChessGameState *game) {
         }
     }
     
+    // ATTACKING BONUS - encourage pieces to attack
+    // Simple check: bonus for pieces that have enemy pieces in their "line of attack"
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.type == EMPTY || p.type == KING || p.type == PAWN) continue;
+            
+            // Quick attack check - just count if enemy pieces are reachable
+            int attacking = 0;
+            int highest_target_value = 0;
+            bool is_threatened = false;
+            
+            for (int tr = 0; tr < 8; tr++) {
+                for (int tc = 0; tc < 8; tc++) {
+                    ChessPiece target = game->board[tr][tc];
+                    if (target.type == EMPTY || target.color == p.color) continue;
+                    
+                    bool can_attack = false;
+                    
+                    // Knight: can attack anything 2-1 away
+                    if (p.type == KNIGHT) {
+                        int dr = abs(tr - r);
+                        int dc = abs(tc - c);
+                        if ((dr == 2 && dc == 1) || (dr == 1 && dc == 2)) {
+                            can_attack = true;
+                        }
+                    }
+                    // Rook: can attack along rank or file
+                    else if (p.type == ROOK) {
+                        if (r == tr || c == tc) {
+                            can_attack = true;
+                        }
+                    }
+                    // Bishop: can attack along diagonal
+                    else if (p.type == BISHOP) {
+                        if (abs(tr - r) == abs(tc - c)) {
+                            can_attack = true;
+                        }
+                    }
+                    // Queen: rook + bishop
+                    else if (p.type == QUEEN) {
+                        if (r == tr || c == tc || abs(tr - r) == abs(tc - c)) {
+                            can_attack = true;
+                        }
+                    }
+                    
+                    if (can_attack) {
+                        attacking++;
+                        if (piece_values[target.type] > highest_target_value) {
+                            highest_target_value = piece_values[target.type];
+                        }
+                        
+                        // Check if target can attack back
+                        bool target_attacks_back = false;
+                        if (target.type == KNIGHT) {
+                            int dr = abs(r - tr);
+                            int dc = abs(c - tc);
+                            if ((dr == 2 && dc == 1) || (dr == 1 && dc == 2)) {
+                                target_attacks_back = true;
+                            }
+                        } else if (target.type == ROOK) {
+                            if (tr == r || tc == c) {
+                                target_attacks_back = true;
+                            }
+                        } else if (target.type == BISHOP) {
+                            if (abs(r - tr) == abs(c - tc)) {
+                                target_attacks_back = true;
+                            }
+                        } else if (target.type == QUEEN) {
+                            if (tr == r || tc == c || abs(r - tr) == abs(c - tc)) {
+                                target_attacks_back = true;
+                            }
+                        } else if (target.type == PAWN) {
+                            // Pawn attacks diagonally
+                            int pawn_dir = (target.color == WHITE) ? -1 : 1;
+                            if (tr + pawn_dir == r && abs(tc - c) == 1) {
+                                target_attacks_back = true;
+                            }
+                        }
+                        
+                        if (target_attacks_back) {
+                            is_threatened = true;
+                        }
+                    }
+                }
+            }
+            
+            // Bonus for attacking (5 points per attacked piece, 15 extra for attacking high-value piece)
+            if (attacking > 0) {
+                int attack_bonus = attacking * 5;
+                if (highest_target_value >= 500) {  // Attacking rook or queen
+                    attack_bonus += 15;
+                }
+                
+                // PENALTY if this piece is threatened by what it attacks
+                // Don't attack if you'll get taken (unless favorable trade)
+                if (is_threatened) {
+                    int threat_penalty = piece_values[p.type] / 3;  // Lose 1/3 of piece value if attacked back
+                    attack_bonus -= threat_penalty;
+                }
+                
+                score += (p.color == WHITE) ? attack_bonus : -attack_bonus;
+            }
+        }
+    }
+    
     // ROOK ACTIVITY - rooks should stay put until endgame
     // Count material to determine game phase
     int material_count = 0;
