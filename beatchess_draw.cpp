@@ -1052,3 +1052,7 @@ void draw_piece(cairo_t *cr, PieceType type, ChessColor color, double x, double 
         draw_geometric_piece(cr, type, color, x, y, size, dance_offset);
     }
 }
+
+bool get_rendering_mode() {
+    return use_sprites;
+}
