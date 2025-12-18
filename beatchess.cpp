@@ -1533,6 +1533,7 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
 // VISUALIZATION SYSTEM
 // ============================================================================
 
+#ifndef MSDOS
 void init_beat_chess_system(Visualizer *vis) {
     BeatChessVisualization *chess = &vis->beat_chess;
     
@@ -1657,6 +1658,7 @@ void init_beat_chess_system(Visualizer *vis) {
     chess->selected_piece_was_pressed = false;
     
 }
+#endif
 
 bool beat_chess_detect_beat(void *vis_ptr) {
     Visualizer *vis = (Visualizer*)vis_ptr;
@@ -2470,3 +2472,5 @@ void chess_cleanup_thinking_state(ChessThinkingState *ts) {
     ts->thinking = false;
 #endif
 }
+
+
