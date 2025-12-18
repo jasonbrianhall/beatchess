@@ -575,9 +575,8 @@ int main(int argc, char *argv[]) {
     
     // Initialize sprite cache
     init_sprite_cache();
-    
+    set_rendering_mode(true);
     ChessGUI gui;
-    memset(&gui, 0, sizeof(gui));
     
     gui.player_is_white = true;
     gui.zero_players = false;
@@ -662,7 +661,7 @@ int main(int argc, char *argv[]) {
     GtkWidget *view_menu = gtk_menu_new();
     GtkWidget *view_item = gtk_menu_item_new_with_label("View");
     
-    gui.render_mode_item = gtk_menu_item_new_with_label("Render Mode: Geometric");
+    gui.render_mode_item = gtk_menu_item_new_with_label("Render Mode: Sprite");
     g_signal_connect(gui.render_mode_item, "activate", G_CALLBACK(on_toggle_render_mode), &gui);
     gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), gui.render_mode_item);
     
