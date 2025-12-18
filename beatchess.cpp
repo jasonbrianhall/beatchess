@@ -1685,6 +1685,7 @@ bool beat_chess_detect_beat(void *vis_ptr) {
     return false;
 }
 
+#ifndef MSDOS
 void update_beat_chess(void *vis_ptr, double dt) {
     Visualizer *vis = (Visualizer*)vis_ptr;
     BeatChessVisualization *chess = &vis->beat_chess;
@@ -2453,6 +2454,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
         }
     }
 }
+#endif
 
 void chess_cleanup_thinking_state(ChessThinkingState *ts) {
 #if BEATCHESS_HAS_PTHREAD
