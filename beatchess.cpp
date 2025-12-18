@@ -1,5 +1,6 @@
 #include "beatchess.h"
 #include "visualization.h"
+#include "chess_pieces.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1542,6 +1543,9 @@ void init_beat_chess_system(Visualizer *vis) {
         srand((unsigned int)time(NULL));
         seeded = 1;
     }
+    
+    init_sprite_cache();
+    set_rendering_mode(true); 
     
     // Initialize game
     chess_init_board(&chess->game);
