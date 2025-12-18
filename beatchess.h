@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include <stdint.h>
 
 /* Platform detection and conditional includes */
 #ifdef MSDOS
@@ -22,7 +23,16 @@
 #endif
 #define BEAT_HISTORY_SIZE 10
 #define MAX_MOVES_BEFORE_DRAW 300
-#define MAX_MOVE_HISTORY (2 * MAX_MOVES_BEFORE_DRAW)  /* 600 - straight buffer, 2x moves before stalemate */
+#define MAX_MOVE_HISTORY (2 * MAX_MOVES_BEFORE_DRAW)
+
+/* ============================================================================
+ * OPTIMIZATION CONSTANTS
+ * ============================================================================
+ */
+#define TRANSPOSITION_TABLE_SIZE 131072  // 128K entries
+#define MAX_KILLERS_PER_DEPTH 2
+#define TT_MASK (TRANSPOSITION_TABLE_SIZE - 1)
+
 /* ============================================================================
  * Straight Buffer Macros for Move History (no circular wrapping)
  * ============================================================================
@@ -54,7 +64,46 @@ typedef struct {
     int en_passant_row; // The row where en passant capture would land
 } ChessGameState;
 
-/* Platform-specific ChessThinkingState */
+/* ============================================================================
+ * OPTIMIZATION STRUCTURES
+ * ============================================================================
+ */
+
+typedef enum { TT_EXACT, TT_LOWER, TT_UPPER } TTFlag;
+
+typedef struct {
+    uint64_t hash;
+    int value;
+    int depth;
+    TTFlag flag;
+} TranspositionEntry;
+
+typedef struct {
+    ChessMove killer_moves[MAX_CHESS_DEPTH + 1][MAX_KILLERS_PER_DEPTH];
+    int killer_count[MAX_CHESS_DEPTH + 1];
+} KillerMoveTable;
+
+typedef struct {
+    int history[8][8][8][8];  // [from_row][from_col][to_row][to_col]
+} HistoryHeuristic;
+
+/* ============================================================================
+ * ZOBRIST HASHING STRUCTURES
+ * ============================================================================
+ */
+
+typedef struct {
+    uint64_t zobrist_board[8][8][7];      // [row][col][piecetype]
+    uint64_t zobrist_side_to_move;
+    uint64_t zobrist_en_passant[8];
+    uint64_t zobrist_castling[4];
+} ZobristTable;
+
+/* ============================================================================
+ * Platform-specific ChessThinkingState
+ * ============================================================================
+ */
+
 typedef struct {
     ChessGameState game;
     ChessMove best_move;
@@ -78,7 +127,7 @@ typedef enum {
 typedef struct {
     ChessGameState game_state;
     ChessMove move;
-    double time_elapsed;  // Time spent on this move
+    double time_elapsed;
 } MoveHistory;
 
 typedef struct {
@@ -124,10 +173,10 @@ typedef struct {
     bool auto_play_enabled;        // Whether to auto-play good moves
     
     // Check/Checkmate/Stalemate display
-    bool is_in_check;              // True if current player is in check
-    double check_display_timer;    // Display "CHECK" for 1 second (0 = not displayed)
-    bool is_checkmate;             // True if game is in checkmate (permanent display)
-    bool is_stalemate;             // True if game is in stalemate (permanent display)
+    bool is_in_check;
+    double check_display_timer;
+    bool is_checkmate;
+    bool is_stalemate;
     
     // GTK UI buttons and controls
     double reset_button_x, reset_button_y;
@@ -167,21 +216,21 @@ typedef struct {
     int move_count;
     
     MoveHistory move_history[MAX_MOVE_HISTORY*2];
-    int move_history_count;      // Total number of moves made (increments continuously)
+    int move_history_count;
     
     // Time tracking
-    double white_total_time;  // Cumulative time for White
-    double black_total_time;  // Cumulative time for Black
-    double current_move_start_time;  // When current move phase started (for display)
-    double last_move_end_time;  // When the last move was completed (for accurate timing)
+    double white_total_time;
+    double black_total_time;
+    double current_move_start_time;
+    double last_move_end_time;
     
     // Player control state
-    bool player_vs_ai;  // true = Player vs AI, false = AI vs AI
-    bool board_flipped;  // true = board flipped (player plays Black), false = normal (player plays White)
+    bool player_vs_ai;
+    bool board_flipped;
     
-    int selected_piece_row, selected_piece_col;  // Currently selected piece
+    int selected_piece_row, selected_piece_col;
     bool has_selected_piece;
-    int selected_piece_was_pressed;  // Mouse state for selection
+    int selected_piece_was_pressed;
     
 } BeatChessVisualization;
 
@@ -201,41 +250,27 @@ typedef struct {
 #define COLOR_WHITE     7
 #define COLOR_GRAY      8
 
-/* ============================================================================
- * UI Button Structure
- * ============================================================================
- */
-
 typedef struct {
     int x, y, w, h;
     const char *label;
-    int hotkey;  /* Keyboard shortcut */
+    int hotkey;
     bool enabled;
 } Button;
 
-/* ============================================================================
- * Global game state
- * ============================================================================
- */
-
 typedef struct {
     ChessGameState game;
-    
-    /* Board state */
     int selected_row, selected_col;
-    int piece_selected_row, piece_selected_col;  /* Track where piece was selected from */
+    int piece_selected_row, piece_selected_col;
     bool piece_selected;
     int last_move_from_row, last_move_from_col;
     int last_move_to_row, last_move_to_col;
     bool has_last_move;
     
-    /* History - straight buffer (no circular wrapping) */
     ChessGameState history[MAX_MOVE_HISTORY*2];
-    MoveHistory move_history[MAX_MOVE_HISTORY*2];     /* Use MoveHistory for timing info */
-    int history_size;              /* Number of moves currently in buffer (0 to MAX_MOVE_HISTORY) */
-    int history_capacity;          /* Buffer capacity (should be MAX_MOVE_HISTORY) */
+    MoveHistory move_history[MAX_MOVE_HISTORY*2];
+    int history_size;
+    int history_capacity;
     
-    /* UI state */
     bool show_help;
     bool show_about;
     bool show_menu;
@@ -243,46 +278,45 @@ typedef struct {
     bool ai_vs_ai;
     bool player_is_white;
     
-    /* AI state */
     int ai_move_delay;
     int ai_move_counter;
     bool ai_thinking;
-    bool ai_computing;  /* NEW: true when AI is actually in compute_ai_move() */
+    bool ai_computing;
     ChessMove ai_best_move;
     int ai_search_depth;
     int ai_total_moves;
     int ai_evaluated_moves;
     
-    /* Timer state */
     int white_time_seconds;
     int white_time_frames;
     int black_time_seconds;
     int black_time_frames;
     bool timer_started;
-    int ai_thinking_start_time;  /* Track when AI started thinking */
+    int ai_thinking_start_time;
     
-    /* Check/Checkmate/Stalemate display */
-    bool is_in_check;              /* True if current player is in check */
-    double check_display_timer;    /* Display "CHECK" for 1 second (0 = not displayed) */
-    bool is_checkmate;             /* True if game is in checkmate */
-    bool is_stalemate;             /* True if game is in stalemate */
+    bool is_in_check;
+    double check_display_timer;
+    bool is_checkmate;
+    bool is_stalemate;
     
-    /* Move history with timing information */
-    int move_count;                /* Total number of moves made (for display: "Move: N") */
-    int move_history_count;        /* Count of moves in history (for circular buffer) */
-    int move_history_index;        /* Current write position in circular buffer */
+    int move_count;
+    int move_history_count;
+    int move_history_index;
     
-    /* Time tracking per move */
-    double white_total_time;       /* Cumulative time for White */
-    double black_total_time;       /* Cumulative time for Black */
-    double current_move_start_time; /* When current move phase started */
-    double last_move_end_time;     /* When the last move was completed */
+    double white_total_time;
+    double black_total_time;
+    double current_move_start_time;
+    double last_move_end_time;
     
 } ChessGUI;
 
 #endif
 
-/* Function declarations */
+/* ============================================================================
+ * FUNCTION DECLARATIONS - CORE CHESS
+ * ============================================================================
+ */
+
 bool chess_can_undo(BeatChessVisualization *chess);
 void chess_init_board(ChessGameState *game);
 bool chess_is_valid_move(ChessGameState *game, int fr, int fc, int tr, int tc);
@@ -290,18 +324,37 @@ void chess_execute_move(ChessGameState *game, int fr, int fc, int tr, int tc);
 bool chess_is_in_bounds(int r, int c);
 bool chess_is_path_clear(ChessGameState *game, int fr, int fc, int tr, int tc);
 void chess_make_move(ChessGameState *game, ChessMove move);
-
-/**
- * Add a move to the history using circular buffer logic
- */
 void chess_save_move_history(BeatChessVisualization *chess, ChessMove move, double time_elapsed);
-
 int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves);
 int chess_evaluate_position(ChessGameState *game);
 bool chess_is_in_check(ChessGameState *game, ChessColor color);
 int chess_minimax(ChessGameState *game, int depth, int alpha, int beta, bool maximizing);
+ChessGameStatus chess_check_game_status(ChessGameState *game);
 void save_position_to_history();
 void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to_c);
 void undo_move();
+
+/* ============================================================================
+ * FUNCTION DECLARATIONS - OPTIMIZATION
+ * ============================================================================
+ */
+
+// Zobrist hashing
+void chess_init_zobrist(void);
+uint64_t chess_zobrist_hash(ChessGameState *game);
+
+// Transposition table
+void chess_clear_transposition_table(void);
+void chess_store_tt(uint64_t hash, int depth, int value, TTFlag flag);
+bool chess_probe_tt(uint64_t hash, int depth, int alpha, int beta, int *out_value);
+
+// Killer moves
+void chess_update_killer_move(KillerMoveTable *killers, ChessMove move, int depth);
+void chess_clear_killers(KillerMoveTable *killers);
+
+// Enhanced minimax
+int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, 
+                          int alpha, int beta, bool maximizing,
+                          KillerMoveTable *killers);
 
 #endif // BEATCHESS_H
