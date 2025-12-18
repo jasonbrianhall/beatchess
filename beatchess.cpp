@@ -1532,8 +1532,7 @@ void chess_undo_last_move(BeatChessVisualization *chess) {
 // VISUALIZATION SYSTEM
 // ============================================================================
 
-void init_beat_chess_system(void *vis_ptr) {
-    Visualizer *vis = (Visualizer*)vis_ptr;
+void init_beat_chess_system(Visualizer *vis) {
     BeatChessVisualization *chess = &vis->beat_chess;
     
     // Seed random number generator once at system initialization
