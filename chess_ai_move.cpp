@@ -24,7 +24,7 @@ typedef struct {
 /**
  * Debug macro - only prints if CHESS_AI_DEBUG is defined
  */
-#ifdef DEBUG
+#ifdef CHESS_AI_DEBUG
     #define DEBUG_PRINT(fmt, ...) printf(fmt, ##__VA_ARGS__)
     #define DEBUG_MOVE(m) \
         printf("    %c%d -> %c%d", \
