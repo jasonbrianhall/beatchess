@@ -3,6 +3,10 @@
  * Enhanced version with File menu and side buttons
  */
 
+#include "beatchess.h"
+#include "chess_pieces.h"
+#include "chess_pieces_loader.h"
+#include "splashscreen.h"
 #include <allegro.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,10 +14,6 @@
 #include <ctype.h>
 #include <limits.h>
 #include <time.h>
-#include "beatchess.h"
-#include "chess_pieces.h"
-#include "chess_pieces_loader.h"
-#include "splashscreen.h"
 
 /* ============================================================================
  * UI Definitions
