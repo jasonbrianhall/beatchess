@@ -363,5 +363,6 @@ int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, i
 
 void init_sprite_cache();
 void set_rendering_mode(bool sprites);
+void toggle_sprite_mode();
 
 #endif // BEATCHESS_H

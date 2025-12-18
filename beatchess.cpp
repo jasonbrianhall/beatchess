@@ -1636,6 +1636,11 @@ void init_beat_chess_system(Visualizer *vis) {
     chess->flip_button_was_pressed = false;
     chess->board_flipped = false;  // Normal orientation by default
     
+    // Render mode button
+    chess->render_mode_button_hovered = false;
+    chess->render_mode_button_glow = 0;
+    chess->render_mode_button_was_pressed = false;
+    
     // Move history
     chess->move_history_count = 0;
     
@@ -1932,6 +1937,34 @@ void update_beat_chess(void *vis_ptr, double dt) {
         chess->flip_button_glow *= 0.95;
     }
     // =============================================
+    
+    // ===== CHECK RENDER MODE BUTTON INTERACTION =====
+    // Detect if mouse is over button (for hover effects)
+    bool is_over_render_mode = (vis->mouse_x >= chess->render_mode_button_x && 
+                                vis->mouse_x <= chess->render_mode_button_x + chess->render_mode_button_width &&
+                                vis->mouse_y >= chess->render_mode_button_y && 
+                                vis->mouse_y <= chess->render_mode_button_y + chess->render_mode_button_height);
+    
+    chess->render_mode_button_hovered = is_over_render_mode;
+    
+    // Detect click: button was pressed last frame AND released this frame
+    bool render_mode_was_pressed = chess->render_mode_button_was_pressed;
+    bool render_mode_is_pressed = vis->mouse_left_pressed;
+    bool render_mode_clicked = (render_mode_was_pressed && !render_mode_is_pressed && is_over_render_mode);
+    
+    // Update for next frame
+    chess->render_mode_button_was_pressed = render_mode_is_pressed;
+    
+    // Handle the click if it happened
+    if (render_mode_clicked) {
+        // Toggle between sprites and geometric rendering
+        toggle_sprite_mode();
+        chess->render_mode_button_glow = 1.0;
+    }
+    
+    // Decay glow effect
+    chess->render_mode_button_glow *= 0.95;
+    // ================================================
     
     // Decay glow effects
     chess->reset_button_glow *= 0.95;

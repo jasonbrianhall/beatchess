@@ -12,7 +12,15 @@
 // GLOBAL RENDERING MODE
 // ============================================================================
 
-static bool use_sprites = false;  // Default to geometric shapes
+bool use_sprites = false;  // Default to geometric shapes (now extern accessible)
+
+void set_rendering_mode(bool sprites) {
+    use_sprites = sprites;
+}
+
+void toggle_sprite_mode() {
+    use_sprites = !use_sprites;
+}
 
 void draw_chess_board(BeatChessVisualization *chess, cairo_t *cr) {
     double cell = chess->cell_size;
@@ -438,14 +446,6 @@ void draw_chess_last_move_highlight(BeatChessVisualization *chess, cairo_t *cr) 
     cairo_fill(cr);
 }
 
-void set_rendering_mode(bool sprites) {
-    use_sprites = sprites;
-}
-
-bool get_rendering_mode() {
-    return use_sprites;
-}
-
 // ============================================================================
 // SPRITE RENDERING FUNCTIONS
 // ============================================================================
@@ -817,22 +817,22 @@ void draw_chess_render_mode_button(BeatChessVisualization *chess, cairo_t *cr, i
         double glow_alpha = chess->render_mode_button_glow * 0.5;
         if (chess->render_mode_button_hovered) glow_alpha = 0.4;
         
-        cairo_set_source_rgba(cr, 0.2, 1.0, 0.5, glow_alpha);  // Green glow
+        cairo_set_source_rgba(cr, 1.0, 0.7, 0.2, glow_alpha);
         cairo_rectangle(cr, button_x - 3, button_y - 3, button_width + 6, button_height + 6);
         cairo_stroke(cr);
     }
     
-    // Border - highlight if sprite mode is active
-    cairo_set_source_rgb(cr, chess->render_mode_button_hovered ? 0.3 : (use_sprites ? 0.4 : 0.5), 
-                         chess->render_mode_button_hovered ? 0.9 : (use_sprites ? 0.9 : 0.7), 
-                         chess->render_mode_button_hovered ? 1.0 : (use_sprites ? 0.5 : 0.6));
-    cairo_set_line_width(cr, use_sprites ? 3 : 2);
+    // Border - SAME AS RESET BUTTON
+    cairo_set_source_rgb(cr, chess->render_mode_button_hovered ? 1.0 : 0.7, 
+                         chess->render_mode_button_hovered ? 0.7 : 0.5, 
+                         chess->render_mode_button_hovered ? 0.2 : 0.3);
+    cairo_set_line_width(cr, 2);
     cairo_rectangle(cr, button_x, button_y, button_width, button_height);
     cairo_stroke(cr);
     
     // Text - show current rendering mode
     cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 10);
+    cairo_set_font_size(cr, 14);
     
     const char *button_text = use_sprites ? "SPRITE" : "GEOMETRIC";
     
@@ -842,9 +842,9 @@ void draw_chess_render_mode_button(BeatChessVisualization *chess, cairo_t *cr, i
     double text_x = button_x + (button_width - extents.width) / 2;
     double text_y = button_y + (button_height + extents.height) / 2;
     
-    cairo_set_source_rgb(cr, chess->render_mode_button_hovered ? 0.3 : (use_sprites ? 0.2 : 0.8), 
-                         chess->render_mode_button_hovered ? 0.9 : (use_sprites ? 1.0 : 0.6), 
-                         chess->render_mode_button_hovered ? 1.0 : (use_sprites ? 0.6 : 0.2));
+    cairo_set_source_rgb(cr, chess->render_mode_button_hovered ? 1.0 : 0.9, 
+                         chess->render_mode_button_hovered ? 0.8 : 0.7, 
+                         chess->render_mode_button_hovered ? 0.3 : 0.4);
     cairo_move_to(cr, text_x, text_y);
     cairo_show_text(cr, button_text);
 }
@@ -1001,6 +1001,38 @@ void draw_chess_undo_button(BeatChessVisualization *chess, cairo_t *cr, int widt
     }
     cairo_move_to(cr, text_x, text_y);
     cairo_show_text(cr, "UNDO");
+}
+
+// ============================================================================
+// SPRITE MODE CONTROL
+// ============================================================================
+
+bool is_render_mode_button_clicked(BeatChessVisualization *chess, double x, double y) {
+    return (x >= chess->render_mode_button_x && x < chess->render_mode_button_x + chess->render_mode_button_width &&
+            y >= chess->render_mode_button_y && y < chess->render_mode_button_y + chess->render_mode_button_height);
+}
+
+bool get_sprite_mode(void) {
+    return use_sprites;
+}
+
+// Call this from your mouse event handler
+void update_render_mode_button_click(BeatChessVisualization *chess, double x, double y, bool mouse_down) {
+    bool is_over_button = is_render_mode_button_clicked(chess, x, y);
+    
+    // Update hover state
+    chess->render_mode_button_hovered = is_over_button;
+    
+    // Handle click-release (button was pressed and is now released)
+    if (is_over_button && mouse_down && !chess->render_mode_button_was_pressed) {
+        chess->render_mode_button_was_pressed = true;
+    } else if (!mouse_down && chess->render_mode_button_was_pressed) {
+        // Mouse released - trigger toggle
+        toggle_sprite_mode();
+        chess->render_mode_button_was_pressed = false;
+    } else if (!is_over_button) {
+        chess->render_mode_button_was_pressed = false;
+    }
 }
 
 // ============================================================================
