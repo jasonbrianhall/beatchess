@@ -794,6 +794,61 @@ static void draw_geometric_piece(cairo_t *cr, PieceType type, ChessColor color, 
     }
 }
 
+void draw_chess_render_mode_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    // Button position and size - LEFT SIDE, below UNDO button
+    double button_width = 120;
+    double button_height = 40;
+    double button_x = 20;  // LEFT side, same as other buttons
+    double button_y = 220;  // Below UNDO button (170 + 40 + 10 spacing)
+    
+    // Store button position for hit detection
+    chess->render_mode_button_x = button_x;
+    chess->render_mode_button_y = button_y;
+    chess->render_mode_button_width = button_width;
+    chess->render_mode_button_height = button_height;
+    
+    // Background
+    cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_fill(cr);
+    
+    // Glow effect if hovered
+    if (chess->render_mode_button_hovered || chess->render_mode_button_glow > 0) {
+        double glow_alpha = chess->render_mode_button_glow * 0.5;
+        if (chess->render_mode_button_hovered) glow_alpha = 0.4;
+        
+        cairo_set_source_rgba(cr, 0.2, 1.0, 0.5, glow_alpha);  // Green glow
+        cairo_rectangle(cr, button_x - 3, button_y - 3, button_width + 6, button_height + 6);
+        cairo_stroke(cr);
+    }
+    
+    // Border - highlight if sprite mode is active
+    cairo_set_source_rgb(cr, chess->render_mode_button_hovered ? 0.3 : (use_sprites ? 0.4 : 0.5), 
+                         chess->render_mode_button_hovered ? 0.9 : (use_sprites ? 0.9 : 0.7), 
+                         chess->render_mode_button_hovered ? 1.0 : (use_sprites ? 0.5 : 0.6));
+    cairo_set_line_width(cr, use_sprites ? 3 : 2);
+    cairo_rectangle(cr, button_x, button_y, button_width, button_height);
+    cairo_stroke(cr);
+    
+    // Text - show current rendering mode
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 10);
+    
+    const char *button_text = use_sprites ? "SPRITE" : "GEOMETRIC";
+    
+    cairo_text_extents_t extents;
+    cairo_text_extents(cr, button_text, &extents);
+    
+    double text_x = button_x + (button_width - extents.width) / 2;
+    double text_y = button_y + (button_height + extents.height) / 2;
+    
+    cairo_set_source_rgb(cr, chess->render_mode_button_hovered ? 0.3 : (use_sprites ? 0.2 : 0.8), 
+                         chess->render_mode_button_hovered ? 0.9 : (use_sprites ? 1.0 : 0.6), 
+                         chess->render_mode_button_hovered ? 1.0 : (use_sprites ? 0.6 : 0.2));
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, button_text);
+}
+
 void draw_beat_chess(void *vis_ptr, cairo_t *cr) {
     Visualizer *vis = (Visualizer*)vis_ptr;
     BeatChessVisualization *chess = &vis->beat_chess;
@@ -820,6 +875,7 @@ void draw_beat_chess(void *vis_ptr, cairo_t *cr) {
     draw_chess_pvsa_button(chess, cr, width, height);
     draw_chess_flip_button(chess, cr, width, height);
     draw_chess_undo_button(chess, cr, width, height);
+    draw_chess_render_mode_button(chess, cr, width, height);
 }
 
 void draw_chess_flip_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {

@@ -203,6 +203,12 @@ typedef struct {
     double flip_button_glow;
     bool flip_button_was_pressed;
     
+    double render_mode_button_x, render_mode_button_y;
+    double render_mode_button_width, render_mode_button_height;
+    bool render_mode_button_hovered;
+    double render_mode_button_glow;
+    bool render_mode_button_was_pressed;
+    
     // Common state for all platforms
     int last_from_row, last_from_col;
     int last_to_row, last_to_col;
