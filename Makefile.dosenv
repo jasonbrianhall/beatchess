@@ -3,7 +3,7 @@
 VERSION=1.0
 
 # Source files
-SRCS = beatchess_dos.cpp beatchess.cpp
+SRCS = beatchess_dos.cpp beatchess.cpp chess_ai_move.cpp
 
 # Output files
 DOS_TARGET = beatchess.exe
@@ -78,11 +78,17 @@ allegro: get-csdpmi
 	fi
 
 # Quick compile (assumes Allegro is already built)
+# FIXED: Now properly compiles chess_ai_move.cpp
 compile: allegro
 	@echo "Compiling BeatChess with DJGPP and Allegro 4..."
 	@mkdir -p $(OBJ_DIR)
+	@echo "Compiling beatchess.cpp..."
 	@g++ -c beatchess.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/beatchess.o
+	@echo "Compiling beatchess_dos.cpp..."
 	@g++ -c beatchess_dos.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/dos_main.o
+	@echo "Compiling chess_ai_move.cpp..."
+	@g++ -c chess_ai_move.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/chess_ai_move.o
+	@echo "Linking executable..."
 	@g++ $(OBJ_DIR)/*.o -L$(BUILD_DIR)/source-install/lib -lalleg -lm $(CFLAGS) -s -o $(BUILD_DIR)/beatchess
 	@echo "Converting to COFF format..."
 	@exe2coff $(BUILD_DIR)/beatchess.exe
@@ -145,4 +151,3 @@ status:
 	fi
 
 .PHONY: all help setup get-csdpmi allegro compile dos run clean clean-obj clean-allegro status
-
