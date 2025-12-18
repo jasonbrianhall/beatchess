@@ -72,6 +72,58 @@ ChessGUI chess_gui;
 int dark_color_idx = 0;    /* Index into dark_color_palette */
 int light_color_idx = 0;   /* Index into light_color_palette */
 
+/* Triple buffering setup */
+#define NUM_BUFFERS 3
+BITMAP *buffers[NUM_BUFFERS];
+int current_buffer = 0;
+BITMAP *active_buffer = NULL;
+
+/* Help menu dropdown state (separate from show_help screen) */
+bool show_help_menu_dropdown = false;
+
+/**
+ * Initialize triple buffering
+ */
+void init_triple_buffers() {
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        buffers[i] = create_bitmap(640, 480);
+        if (!buffers[i]) {
+            allegro_exit();
+            fprintf(stderr, "Failed to allocate buffer %d\n", i);
+            exit(1);
+        }
+    }
+    current_buffer = 0;
+    active_buffer = buffers[0];
+}
+
+/**
+ * Swap to next buffer and return it for drawing
+ */
+BITMAP* get_next_buffer_and_swap() {
+    /* Display the previously prepared buffer */
+    vsync();  /* Wait for vertical sync */
+    blit(buffers[current_buffer], screen, 0, 0, 0, 0, 640, 480);
+    
+    /* Advance to next buffer for drawing */
+    current_buffer = (current_buffer + 1) % NUM_BUFFERS;
+    active_buffer = buffers[current_buffer];
+    
+    return active_buffer;
+}
+
+/**
+ * Cleanup triple buffers
+ */
+void cleanup_triple_buffers() {
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        if (buffers[i]) {
+            destroy_bitmap(buffers[i]);
+            buffers[i] = NULL;
+        }
+    }
+}
+
 /**
  * Retrieve a game state from history at logical position.
  * Uses a straight buffer - no circular wrapping.
@@ -133,21 +185,26 @@ Button side_buttons[] = {
 
 #define NUM_BUTTONS (sizeof(side_buttons) / sizeof(side_buttons[0]))
 
-/* Menu items */
-const char *menu_items[] = {
+/* File menu items */
+const char *file_menu_items[] = {
     "New Game     N",
     "Undo Move    U",
     "",  /* separator */
     "AI vs AI     A",
     "Swap Color   B",
     "",  /* separator */
-    "Help         ?",
-    "About...",
-    "",  /* separator */
     "Quit         Q"
 };
 
-#define NUM_MENU_ITEMS (sizeof(menu_items) / sizeof(menu_items[0]))
+#define NUM_FILE_MENU_ITEMS (sizeof(file_menu_items) / sizeof(file_menu_items[0]))
+
+/* Help menu items */
+const char *help_menu_items[] = {
+    "Help         ?",
+    "About..."
+};
+
+#define NUM_HELP_MENU_ITEMS (sizeof(help_menu_items) / sizeof(help_menu_items[0]))
 
 /* ============================================================================
  * Helper functions
@@ -198,9 +255,6 @@ void init_chess_game() {
     chess_gui.last_move_to_col = -1;
     chess_gui.has_last_move = false;
     chess_gui.show_help = false;
-    chess_gui.show_about = false;
-    chess_gui.show_menu = false;
-    chess_gui.menu_selected = -1;
 
     /* Reset AI state */
     chess_gui.ai_move_counter = 0;
@@ -664,30 +718,33 @@ void draw_menu_bar() {
     /* Menu bar background */
     rectfill(screen, 0, 0, 640, MENU_BAR_HEIGHT, COLOR_BLUE);
     
-    /* Game menu */
-    textout_ex(screen, font, "Game", 5, 5, COLOR_WHITE, -1);
+    /* File menu button */
+    textout_ex(screen, font, "File", 5, 5, COLOR_WHITE, -1);
+    
+    /* Help menu button */
+    textout_ex(screen, font, "Help", 50, 5, COLOR_WHITE, -1);
     
     /* Title */
     textout_ex(screen, font, "BeatChess - DOS Edition", 200, 5, COLOR_YELLOW, -1);
     
-    /* Draw dropdown menu if active */
+    /* Draw File dropdown menu if active */
     if (chess_gui.show_menu) {
         int menu_x = 0;
         int menu_y = MENU_BAR_HEIGHT;
-        int menu_w = 200;  /* Increased width */
+        int menu_w = 200;
         int item_h = 20;
-        int menu_h = NUM_MENU_ITEMS * item_h;
+        int menu_h = NUM_FILE_MENU_ITEMS * item_h;
         
         /* Menu background with border */
         rectfill(screen, menu_x, menu_y, menu_x + menu_w, menu_y + menu_h, COLOR_BLUE);
         rect(screen, menu_x, menu_y, menu_x + menu_w, menu_y + menu_h, COLOR_WHITE);
         
         /* Menu items */
-        for (int i = 0; i < NUM_MENU_ITEMS; i++) {
+        for (int i = 0; i < NUM_FILE_MENU_ITEMS; i++) {
             int item_y = menu_y + i * item_h;
             
             /* Separator */
-            if (strlen(menu_items[i]) == 0) {
+            if (strlen(file_menu_items[i]) == 0) {
                 hline(screen, menu_x + 5, item_y + item_h/2, menu_x + menu_w - 5, COLOR_GRAY);
                 continue;
             }
@@ -700,9 +757,40 @@ void draw_menu_bar() {
             
             /* Draw menu item text */
             int text_color = (i == chess_gui.menu_selected) ? COLOR_BLACK : COLOR_WHITE;
-            textout_ex(screen, font, menu_items[i], menu_x + 10, item_y + 5, text_color, -1);
+            textout_ex(screen, font, file_menu_items[i], menu_x + 10, item_y + 5, text_color, -1);
         }
     }
+    
+    /* Draw Help dropdown menu if active */
+    if (show_help_menu_dropdown) {
+        int menu_x = 50;
+        int menu_y = MENU_BAR_HEIGHT;
+        int menu_w = 150;
+        int item_h = 20;
+        int menu_h = NUM_HELP_MENU_ITEMS * item_h;
+        
+        /* Menu background with border */
+        rectfill(screen, menu_x, menu_y, menu_x + menu_w, menu_y + menu_h, COLOR_BLUE);
+        rect(screen, menu_x, menu_y, menu_x + menu_w, menu_y + menu_h, COLOR_WHITE);
+        
+        /* Menu items */
+        for (int i = 0; i < NUM_HELP_MENU_ITEMS; i++) {
+            int item_y = menu_y + i * item_h;
+            
+            /* Highlight selected */
+            if (i == chess_gui.menu_selected) {
+                rectfill(screen, menu_x + 2, item_y + 2, 
+                        menu_x + menu_w - 2, item_y + item_h - 2, COLOR_CYAN);
+            }
+            
+            /* Draw menu item text */
+            int text_color = (i == chess_gui.menu_selected) ? COLOR_BLACK : COLOR_WHITE;
+            textout_ex(screen, font, help_menu_items[i], menu_x + 10, item_y + 5, text_color, -1);
+        }
+    }
+    
+    /* Draw Help dropdown menu if active */
+    /* (Help menu disabled - not in ChessGUI struct) */
 }
 
 void draw_button(Button *btn, bool hover) {
@@ -995,38 +1083,42 @@ void draw_about_screen() {
  * ============================================================================
  */
 
-int execute_menu_action(int index) {
-    switch (index) {
-        case 0:  /* New Game */
-            init_chess_game();
-            chess_gui.ai_move_counter = 0;
-            return 1;  /* Continue */
-            
-        case 1:  /* Undo Move */
-            undo_move();
-            chess_gui.ai_move_counter = 0;
-            return 1;  /* Continue */
-            
-        case 3:  /* AI vs AI */
-            chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai;
-            chess_gui.ai_move_counter = 0;
-            return 1;  /* Continue */
-            
-        case 4:  /* Swap Color */
-            chess_gui.player_is_white = !chess_gui.player_is_white;
-            chess_gui.ai_move_counter = 0;
-            return 1;  /* Continue */
-            
-        case 6:  /* Help */
-            chess_gui.show_help = true;
-            return 1;  /* Continue */
-            
-        case 7:  /* About */
-            chess_gui.show_about = true;
-            return 1;  /* Continue */
-            
-        case 9:  /* Quit */
-            return 0;  /* Signal quit */
+int execute_menu_action(int menu_type, int index) {
+    if (menu_type == 0) {  /* File menu */
+        switch (index) {
+            case 0:  /* New Game */
+                init_chess_game();
+                chess_gui.ai_move_counter = 0;
+                return 1;  /* Continue */
+                
+            case 1:  /* Undo Move */
+                undo_move();
+                chess_gui.ai_move_counter = 0;
+                return 1;  /* Continue */
+                
+            case 3:  /* AI vs AI */
+                chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai;
+                chess_gui.ai_move_counter = 0;
+                return 1;  /* Continue */
+                
+            case 4:  /* Swap Color */
+                chess_gui.player_is_white = !chess_gui.player_is_white;
+                chess_gui.ai_move_counter = 0;
+                return 1;  /* Continue */
+                
+            case 6:  /* Quit */
+                return 0;  /* Signal quit */
+        }
+    } else if (menu_type == 1) {  /* Help menu */
+        switch (index) {
+            case 0:  /* Help */
+                chess_gui.show_help = true;
+                return 1;  /* Continue */
+                
+            case 1:  /* About */
+                chess_gui.show_about = true;
+                return 1;  /* Continue */
+        }
     }
     return 1;  /* Continue by default */
 }
@@ -1034,34 +1126,44 @@ int execute_menu_action(int index) {
 int handle_menu_click(int mx, int my) {
     /* Check if clicking menu bar */
     if (my < MENU_BAR_HEIGHT) {
-        if (mx < MENU_ITEM_WIDTH) {
+        /* File menu button (at x=0-50) */
+        if (mx < 50) {
             chess_gui.show_menu = !chess_gui.show_menu;
+            show_help_menu_dropdown = false;  /* Close Help menu if open */
             chess_gui.menu_selected = -1;
             return 1;  /* Continue */
         }
-        /* Clicked elsewhere on menu bar - close menu if open */
-        if (chess_gui.show_menu) {
+        /* Help menu button (at x=50-100) */
+        if (mx >= 50 && mx < 100) {
+            show_help_menu_dropdown = !show_help_menu_dropdown;
+            chess_gui.show_menu = false;  /* Close File menu if open */
+            chess_gui.menu_selected = -1;
+            return 1;  /* Continue */
+        }
+        /* Clicked elsewhere on menu bar - close menus if open */
+        if (chess_gui.show_menu || show_help_menu_dropdown) {
             chess_gui.show_menu = false;
+            show_help_menu_dropdown = false;
             chess_gui.menu_selected = -1;
         }
         return 1;  /* Continue */
     }
     
-    /* Check if clicking menu items */
+    /* Check if clicking File menu items */
     if (chess_gui.show_menu) {
         int menu_x = 0;
         int menu_y = MENU_BAR_HEIGHT;
-        int menu_w = 200;  /* Match the new width */
+        int menu_w = 200;  
         int item_h = 20;
         
         if (mx >= menu_x && mx < menu_x + menu_w &&
-            my >= menu_y && my < menu_y + NUM_MENU_ITEMS * item_h) {
+            my >= menu_y && my < menu_y + NUM_FILE_MENU_ITEMS * item_h) {
             int item = (my - menu_y) / item_h;
             /* Bounds check */
-            if (item >= 0 && item < NUM_MENU_ITEMS) {
+            if (item >= 0 && item < NUM_FILE_MENU_ITEMS) {
                 /* Check if it's not a separator */
-                if (strlen(menu_items[item]) > 0) {
-                    int result = execute_menu_action(item);
+                if (strlen(file_menu_items[item]) > 0) {
+                    int result = execute_menu_action(0, item);
                     chess_gui.show_menu = false;
                     chess_gui.menu_selected = -1;
                     return result;  /* Return the result (0=quit, 1=continue) */
@@ -1070,6 +1172,31 @@ int handle_menu_click(int mx, int my) {
         } else {
             /* Clicked outside menu - close it */
             chess_gui.show_menu = false;
+            chess_gui.menu_selected = -1;
+            return 1;  /* Continue */
+        }
+    }
+    
+    /* Check if clicking Help menu items */
+    if (show_help_menu_dropdown) {
+        int menu_x = 50;
+        int menu_y = MENU_BAR_HEIGHT;
+        int menu_w = 150;  
+        int item_h = 20;
+        
+        if (mx >= menu_x && mx < menu_x + menu_w &&
+            my >= menu_y && my < menu_y + NUM_HELP_MENU_ITEMS * item_h) {
+            int item = (my - menu_y) / item_h;
+            /* Bounds check */
+            if (item >= 0 && item < NUM_HELP_MENU_ITEMS) {
+                int result = execute_menu_action(1, item);
+                show_help_menu_dropdown = false;
+                chess_gui.menu_selected = -1;
+                return result;
+            }
+        } else {
+            /* Clicked outside menu - close it */
+            show_help_menu_dropdown = false;
             chess_gui.menu_selected = -1;
             return 1;  /* Continue */
         }
@@ -1110,18 +1237,34 @@ void update_menu_selection(int my) {
     if (chess_gui.show_menu) {
         int menu_y = MENU_BAR_HEIGHT;
         int item_h = 20;
-        int max_menu_y = menu_y + NUM_MENU_ITEMS * item_h;
+        int max_menu_y = menu_y + NUM_FILE_MENU_ITEMS * item_h;
         
         /* Bounds check */
         if (my >= menu_y && my < max_menu_y) {
             int item = (my - menu_y) / item_h;
             /* Double bounds check and skip separators */
-            if (item >= 0 && item < NUM_MENU_ITEMS) {
-                if (strlen(menu_items[item]) > 0) {
+            if (item >= 0 && item < NUM_FILE_MENU_ITEMS) {
+                if (strlen(file_menu_items[item]) > 0) {
                     chess_gui.menu_selected = item;
                 } else {
                     chess_gui.menu_selected = -1;
                 }
+            } else {
+                chess_gui.menu_selected = -1;
+            }
+        } else {
+            chess_gui.menu_selected = -1;
+        }
+    } else if (show_help_menu_dropdown) {
+        int menu_y = MENU_BAR_HEIGHT;
+        int item_h = 20;
+        int max_menu_y = menu_y + NUM_HELP_MENU_ITEMS * item_h;
+        
+        /* Bounds check */
+        if (my >= menu_y && my < max_menu_y) {
+            int item = (my - menu_y) / item_h;
+            if (item >= 0 && item < NUM_HELP_MENU_ITEMS) {
+                chess_gui.menu_selected = item;
             } else {
                 chess_gui.menu_selected = -1;
             }
@@ -1174,7 +1317,11 @@ int main(void) {
     show_mouse(screen);
     
     /* Create backbuffer for double buffering */
-    BITMAP *backbuffer = create_bitmap(640, 480);
+    /* Initialize triple buffering */
+    init_triple_buffers();
+    
+    /* Keep backbuffer reference for compatibility with splash screen */
+    BITMAP *backbuffer = buffers[0];
     if (!backbuffer) {
         printf("Error creating backbuffer\n");
         allegro_exit();
@@ -1376,12 +1523,12 @@ int main(void) {
             }
         }
         
-        /* Draw to backbuffer (mouse cursor is not drawn to backbuffer) */
+        /* Draw to active buffer (mouse cursor is not drawn to buffer) */
         BITMAP *prev_target = screen;
-        screen = backbuffer;
+        screen = active_buffer;
         
-        /* Clear backbuffer */
-        clear_to_color(backbuffer, COLOR_BLACK);
+        /* Clear active buffer */
+        clear_to_color(active_buffer, COLOR_BLACK);
         
         /* Draw game (no mouse cursor interference) */
         if (chess_gui.show_help) {
@@ -1399,10 +1546,9 @@ int main(void) {
         /* Restore screen target */
         screen = prev_target;
         
-        /* Hardware mouse cursor is automatically shown on screen buffer */
-        /* Blit the backbuffer to screen - this happens under the mouse cursor */
+        /* Triple buffer: swap to next buffer with vsync */
         scare_mouse();  /* Temporarily disable mouse drawing */
-        blit(backbuffer, screen, 0, 0, 0, 0, 640, 480);
+        get_next_buffer_and_swap();  /* Handles vsync and buffer rotation */
         unscare_mouse();  /* Re-enable mouse drawing */
         
         /* Handle input */
@@ -1718,7 +1864,7 @@ int main(void) {
             }
             
             /* If menu was clicked (even if just opened/closed), don't process other clicks */
-            if (chess_gui.show_menu || my < MENU_BAR_HEIGHT) {
+            if (chess_gui.show_menu || show_help_menu_dropdown || my < MENU_BAR_HEIGHT) {
                 prev_mouse_b = mouse_b;
                 continue;
             }
@@ -1793,7 +1939,7 @@ int main(void) {
     
     /* Cleanup */
     destroy_chess_pieces();  /* Free sprite bitmaps */
-    destroy_bitmap(backbuffer);
+    cleanup_triple_buffers();
     cleanup_chess_game();
     allegro_exit();
     
