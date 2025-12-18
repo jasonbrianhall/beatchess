@@ -18,7 +18,7 @@
 
 #ifndef MAX_DEPTH
 #define MAX_DEPTH 10
-
+#endif
 /* ============================================================================
  * OPTIMIZATION: ZOBRIST HASHING
  * ============================================================================
@@ -289,8 +289,6 @@ int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, i
     chess_store_tt(hash, depth, best_value, flag);
     return best_value;
 }
-
-#endif
 
 #define MAX_KILLERS_PER_DEPTH 2
 
