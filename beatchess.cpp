@@ -304,117 +304,17 @@ static bool chess_should_eliminate_move(ChessGameState *game, ChessMove move, in
     ChessPiece attacker = game->board[move.from_row][move.from_col];
     ChessPiece target = game->board[move.to_row][move.to_col];
     
-    // ========== RULE 1: BAD TRADES (Most important for depth) ==========
-    // Eliminate captures where we lose much more than we gain
-    if (target.type != EMPTY) {
-        int target_val = piece_values[target.type];
-        int attacker_val = piece_values[attacker.type];
-        
-        // AGGRESSIVE: Eliminate if we lose MORE material than we gain
-        // (not just 3x more, ANY loss is bad)
-        if (attacker_val > target_val) {
-            // Exception: Allow if piece gives check (might have other benefits)
-            ChessGameState temp = *game;
-            chess_make_move(&temp, move);
-            if (!chess_is_in_check(&temp, game->turn == WHITE ? BLACK : WHITE)) {
-                // Not a check, so this is just a bad trade
-                return true;  // ELIMINATE THIS MOVE
-            }
-        }
-    }
-    
-    // ========== RULE 2: MOVING INTO DANGER (Critical for safety) ==========
-    // Only eliminate moves that lose massive material (e.g., losing piece for nothing)
-    // Don't be too aggressive - some sacrifices are good
-    if (target.type == EMPTY && attacker.type != KING && attacker.type != QUEEN) {
-        // Only filter this for minor pieces and pawns, not majors
-        ChessGameState temp = *game;
-        chess_make_move(&temp, move);
-        
-        // Only eliminate if a much cheaper piece can capture it uncontested
-        // (e.g., pawn captures knight for free)
-        bool is_bad_hanging = false;
-        
-        for (int r = 0; r < 8; r++) {
-            for (int c = 0; c < 8; c++) {
-                ChessPiece enemy = temp.board[r][c];
-                if (enemy.type != EMPTY && enemy.color != attacker.color) {
-                    // Can this enemy piece capture our piece?
-                    if (chess_is_valid_move(&temp, r, c, move.to_row, move.to_col)) {
-                        int enemy_value = piece_values[enemy.type];
-                        int attacker_value = piece_values[attacker.type];
-                        
-                        // Only eliminate if losing MORE than 2:1 material (e.g., knight for pawn)
-                        if (enemy_value < attacker_value / 2) {
-                            is_bad_hanging = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (is_bad_hanging) break;
-        }
-        
-        if (is_bad_hanging) {
-            return true;  // ELIMINATE: Piece would be hanging to much weaker piece
-        }
-    }
-    
-    // ========== RULE 3: KING MOVES INTO CHECK (Never legal) ==========
+    // Only eliminate king moves into check - this is required for legality
     if (attacker.type == KING) {
         ChessGameState temp = *game;
         chess_make_move(&temp, move);
         if (chess_is_in_check(&temp, game->turn)) {
-            return true;  // ELIMINATE: Illegal move
+            return true;  // Illegal move
         }
     }
     
-    // ========== RULE 4: DEPTH-BASED AGGRESSIVE FILTERING ==========
-    // Use initial_depth to determine how aggressive to be
-    // initial_depth - depth = how many plies deep we are from root
-    int plies_from_root = initial_depth - depth;
-    
-    // In the first 3 plies from root, be VERY aggressive
-    if (plies_from_root <= 2) {
-        // At shallow tree levels (close to root), eliminate quiet moves
-        // Keep: captures, checks, pawn advances
-        
-        if (target.type == EMPTY) {  // Quiet move (not a capture)
-            // AGGRESSIVE: Only keep if it's a pawn advance
-            if (attacker.type != PAWN) {
-                // At very shallow (0-1 plies from root), only keep forcing moves
-                if (plies_from_root <= 1) {
-                    // Check if it gives check
-                    ChessGameState temp = *game;
-                    chess_make_move(&temp, move);
-                    if (!chess_is_in_check(&temp, game->turn == WHITE ? BLACK : WHITE)) {
-                        return true;  // ELIMINATE: Not forcing at shallow depth
-                    }
-                }
-            }
-        }
-    }
-    
-    // ========== RULE 5: EVALUATION-BASED FILTERING AT DEEP DEPTHS ==========
-    // Only apply at very deep levels, and be conservative
-    if (plies_from_root >= initial_depth - 1) {  // Only at deepest level
-        // At deepest levels, filter out moves that clearly worsen position
-        ChessGameState temp = *game;
-        int eval_before = chess_evaluate_position(&temp);
-        
-        chess_make_move(&temp, move);
-        int eval_after = chess_evaluate_position(&temp);
-        
-        // Only eliminate moves that significantly worsen position (100+ points)
-        // and don't give check
-        if (eval_after < eval_before - 100) {  // Much worse, not just slightly worse
-            if (!chess_is_in_check(&temp, game->turn == WHITE ? BLACK : WHITE)) {
-                return true;  // ELIMINATE: Significantly worsens position
-            }
-        }
-    }
-    
-    // Keep this move (it passed all filters)
+    // THAT'S IT - Everything else is too expensive
+    // Let the search and material evaluation do the work
     return false;
 }
 
@@ -734,170 +634,84 @@ int chess_evaluate_position(ChessGameState *game) {
     int piece_values[] = {0, 100, 320, 330, 500, 900, 20000};
     int score = 0;
     
-    // Piece-square tables for positional bonuses
-    int pawn_table[8][8] = {
-        {0,  0,  0,  0,  0,  0,  0,  0},
-        {50, 50, 50, 50, 50, 50, 50, 50},
-        {10, 10, 20, 30, 30, 20, 10, 10},
-        {5,  5, 10, 25, 25, 10,  5,  5},
-        {0,  0,  0, 20, 20,  0,  0,  0},
-        {5, -5,-10,  0,  0,-10, -5,  5},
-        {5, 10, 10,-20,-20, 10, 10,  5},
-        {0,  0,  0,  0,  0,  0,  0,  0}
-    };
-    
-    int knight_table[8][8] = {
-        {-50,-40,-30,-30,-30,-30,-40,-50},
-        {-40,-20,  0,  0,  0,  0,-20,-40},
-        {-30,  0, 10, 15, 15, 10,  0,-30},
-        {-30,  5, 15, 20, 20, 15,  5,-30},
-        {-30,  0, 15, 20, 20, 15,  0,-30},
-        {-30,  5, 10, 15, 15, 10,  5,-30},
-        {-40,-20,  0,  5,  5,  0,-20,-40},
-        {-50,-40,-30,-30,-30,-30,-40,-50}
-    };
-    
-    int bishop_table[8][8] = {
-        {-20,-10,-10,-10,-10,-10,-10,-20},
-        {-10,  0,  0,  0,  0,  0,  0,-10},
-        {-10,  0,  5, 10, 10,  5,  0,-10},
-        {-10,  5,  5, 10, 10,  5,  5,-10},
-        {-10,  0, 10, 10, 10, 10,  0,-10},
-        {-10, 10, 10, 10, 10, 10, 10,-10},
-        {-10,  5,  0,  0,  0,  0,  5,-10},
-        {-20,-10,-10,-10,-10,-10,-10,-20}
-    };
-    
-    int king_middle_game[8][8] = {
-        {-30,-40,-40,-50,-50,-40,-40,-30},
-        {-30,-40,-40,-50,-50,-40,-40,-30},
-        {-30,-40,-40,-50,-50,-40,-40,-30},
-        {-30,-40,-40,-50,-50,-40,-40,-30},
-        {-20,-30,-30,-40,-40,-30,-30,-20},
-        {-10,-20,-20,-20,-20,-20,-20,-10},
-        { 20, 20,  0,  0,  0,  0, 20, 20},
-        { 20, 30, 10,  0,  0, 10, 30, 20}
-    };
-    
+    // Material count (dominates everything)
     for (int r = 0; r < BOARD_SIZE; r++) {
         for (int c = 0; c < BOARD_SIZE; c++) {
             ChessPiece p = game->board[r][c];
             if (p.type != EMPTY) {
-                int value = piece_values[p.type];
-                int positional_bonus = 0;
-                
-                // Add positional bonuses
-                if (p.type == PAWN) {
-                    if (p.color == WHITE) {
-                        positional_bonus = pawn_table[r][c];
-                        // Bonus for passed pawns
-                        bool passed = true;
-                        for (int check_r = r - 1; check_r >= 0; check_r--) {
-                            for (int check_c = c - 1; check_c <= c + 1; check_c++) {
-                                if (chess_is_in_bounds(check_r, check_c)) {
-                                    if (game->board[check_r][check_c].type == PAWN && 
-                                        game->board[check_r][check_c].color == BLACK) {
-                                        passed = false;
-                                    }
-                                }
-                            }
-                        }
-                        if (passed && r < 4) positional_bonus += 20;
-                    } else {
-                        positional_bonus = pawn_table[7-r][c];
-                        // Bonus for passed pawns
-                        bool passed = true;
-                        for (int check_r = r + 1; check_r < 8; check_r++) {
-                            for (int check_c = c - 1; check_c <= c + 1; check_c++) {
-                                if (chess_is_in_bounds(check_r, check_c)) {
-                                    if (game->board[check_r][check_c].type == PAWN && 
-                                        game->board[check_r][check_c].color == WHITE) {
-                                        passed = false;
-                                    }
-                                }
-                            }
-                        }
-                        if (passed && r > 3) positional_bonus += 20;
-                    }
-                } else if (p.type == KNIGHT) {
-                    if (p.color == WHITE) {
-                        positional_bonus = knight_table[r][c];
-                    } else {
-                        positional_bonus = knight_table[7-r][c];
-                    }
-                } else if (p.type == BISHOP) {
-                    if (p.color == WHITE) {
-                        positional_bonus = bishop_table[r][c];
-                    } else {
-                        positional_bonus = bishop_table[7-r][c];
-                    }
-                } else if (p.type == KING) {
-                    if (p.color == WHITE) {
-                        positional_bonus = king_middle_game[r][c];
-                    } else {
-                        positional_bonus = king_middle_game[7-r][c];
-                    }
-                }
-                
-                // Bonus for center control (e4, d4, e5, d5)
-                if ((r == 3 || r == 4) && (c == 3 || c == 4)) {
-                    if (p.type == PAWN || p.type == KNIGHT) {
-                        positional_bonus += 15;
-                    }
-                }
-                
-                int total_value = value + positional_bonus;
-                score += (p.color == WHITE) ? total_value : -total_value;
+                score += (p.color == WHITE) ? piece_values[p.type] : -piece_values[p.type];
             }
         }
     }
     
-    // King safety - penalize if king is exposed
-    for (int r = 0; r < BOARD_SIZE; r++) {
-        for (int c = 0; c < BOARD_SIZE; c++) {
-            if (game->board[r][c].type == KING) {
-                int safety_score = 0;
-                ChessColor king_color = game->board[r][c].color;
-                int direction = (king_color == WHITE) ? -1 : 1;
-                
-                // Check for pawns in front of king
+    // DEFENSE CHECK - pieces with friendly neighbors
+    // 15 centipawns per defender - meaningful but not overwhelming
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.type == EMPTY || p.type == KING || p.type == PAWN) continue;
+            
+            // Count friendly pieces adjacent to this piece
+            int defenders = 0;
+            for (int dr = -1; dr <= 1; dr++) {
                 for (int dc = -1; dc <= 1; dc++) {
-                    int check_r = r + direction;
-                    int check_c = c + dc;
-                    if (chess_is_in_bounds(check_r, check_c)) {
-                        if (game->board[check_r][check_c].type == PAWN && 
-                            game->board[check_r][check_c].color == king_color) {
-                            safety_score += 20;
-                        }
+                    if (dr == 0 && dc == 0) continue;
+                    int nr = r + dr;
+                    int nc = c + dc;
+                    if (nr < 0 || nr >= 8 || nc < 0 || nc >= 8) continue;
+                    
+                    ChessPiece neighbor = game->board[nr][nc];
+                    if (neighbor.type != EMPTY && neighbor.color == p.color) {
+                        defenders++;
                     }
                 }
-                
-                // Bonus for castling (king on g1/g8 or c1/c8)
-                if ((king_color == WHITE && r == 7 && (c == 6 || c == 2)) ||
-                    (king_color == BLACK && r == 0 && (c == 6 || c == 2))) {
-                    safety_score += 30;
+            }
+            
+            // 15 centipawns per defender
+            if (defenders > 0) {
+                int defense_bonus = defenders * 15;
+                score += (p.color == WHITE) ? defense_bonus : -defense_bonus;
+            }
+        }
+    }
+    
+    // Pawn advancement bonus
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.type == PAWN) {
+                // White pawns get bonus for advancing (lower row number)
+                if (p.color == WHITE) {
+                    int advance_bonus = (6 - r) * 5;
+                    score += advance_bonus;
+                } else {
+                    // Black pawns get bonus for advancing (higher row number)
+                    int advance_bonus = (r - 1) * 5;
+                    score -= advance_bonus;
+                }
+            }
+        }
+    }
+    
+    // Development bonus - knights/bishops away from starting squares
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.type == KNIGHT || p.type == BISHOP) {
+                bool on_start = false;
+                if (p.color == WHITE && r == 7 && (c == 1 || c == 2 || c == 5 || c == 6)) {
+                    on_start = true;
+                } else if (p.color == BLACK && r == 0 && (c == 1 || c == 2 || c == 5 || c == 6)) {
+                    on_start = true;
                 }
                 
-                score += (king_color == WHITE) ? safety_score : -safety_score;
+                if (!on_start) {
+                    int dev_bonus = 10;
+                    score += (p.color == WHITE) ? dev_bonus : -dev_bonus;
+                }
             }
         }
     }
-    
-    // Bishop pair bonus
-    int white_bishops = 0, black_bishops = 0;
-    for (int r = 0; r < BOARD_SIZE; r++) {
-        for (int c = 0; c < BOARD_SIZE; c++) {
-            if (game->board[r][c].type == BISHOP) {
-                if (game->board[r][c].color == WHITE) white_bishops++;
-                else black_bishops++;
-            }
-        }
-    }
-    if (white_bishops >= 2) score += 30;
-    if (black_bishops >= 2) score -= 30;
-    
-    // Small random factor for variety
-    score += (rand() % 10) - 5;
     
     return score;
 }
@@ -1293,7 +1107,7 @@ void* chess_think_continuously(void* arg) {
                     // Collect all moves within a threshold of the best score
                     ScoredMove candidate_moves[256];
                     int candidate_count = 0;
-                    int threshold = 500;  // Consider moves within 50 centipawns of best
+                    int threshold = 250;  // Consider moves within 25 centipawns of best
                     
                     // Use the already-calculated scores from the main loop (lines 1079-1115)
                     // Don't recalculate - just look at which moves are near-best

@@ -266,7 +266,7 @@ void make_ai_move(ChessGUI *gui) {
     
     // Make the best move found
     if (best_move.from_row >= 0 && best_move.from_col >= 0) {
-        // Collect all moves within 50 centipawns of the best score
+        // Collect all moves within 25 centipawns of the best score
         typedef struct {
             ChessMove move;
             int score;
@@ -274,7 +274,7 @@ void make_ai_move(ChessGUI *gui) {
         
         ScoredMove candidate_moves[256];
         int candidate_count = 0;
-        int threshold = 50;  // 50 centipawns
+        int threshold = 25;  // 25 centipawns
         
         printf("BEST SCORE: %d, collecting candidates within %d centipawns\n", best_score, threshold);
         

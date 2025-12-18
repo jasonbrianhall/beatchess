@@ -609,7 +609,7 @@ ChessMove compute_ai_move() {
         chess_gui.ai_total_moves = num_moves;
     }
     
-    /* Non-deterministic move selection: collect moves within 50 centipawns of best */
+    /* Non-deterministic move selection: collect moves within 25 centipawns of best */
     typedef struct {
         ChessMove move;
         int score;
@@ -617,7 +617,7 @@ ChessMove compute_ai_move() {
     
     ScoredMove candidate_moves[256];
     int candidate_count = 0;
-    int threshold = 50;  /* 50 centipawns */
+    int threshold = 25;  /* 25 centipawns */
     
     for (int i = 0; i < num_moves; i++) {
         ChessGameState temp = chess_gui.game;
