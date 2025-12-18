@@ -353,8 +353,6 @@ void chess_update_killer_move(KillerMoveTable *killers, ChessMove move, int dept
 void chess_clear_killers(KillerMoveTable *killers);
 
 // Enhanced minimax
-int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, 
-                          int alpha, int beta, bool maximizing,
-                          KillerMoveTable *killers);
+int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, int alpha, int beta, bool maximizing, KillerMoveTable *killers);
 
 #endif // BEATCHESS_H

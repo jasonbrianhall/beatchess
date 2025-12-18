@@ -6,6 +6,7 @@
 #include "beatchess.h"
 #include "chess_pieces.h"
 #include "chess_pieces_loader.h"
+#include "chess_ai_move.h"
 #include "splashscreen.h"
 #include <allegro.h>
 #include <stdio.h>
@@ -497,9 +498,12 @@ void undo_move() {
     chess_gui.ai_move_counter = 0;
 }
 
-/* Global counter for making AI computation interruptible */
-static volatile int ai_eval_counter = 0;
-#define AI_YIELD_INTERVAL 1000  /* Yield control every N evaluations */
+/* Global variables removed as they are now managed by chess_ai_move module:
+ * - ai_eval_counter: Interruptibility handled by shared module
+ * - ScoredMove struct: Internal to shared module
+ * - Move collection logic: Handled by shared module
+ */
+
 
 /* Display splash screen and wait for keypress or timeout */
 void show_splash_screen(BITMAP *backbuffer) {
@@ -609,104 +613,42 @@ void show_splash_screen(BITMAP *backbuffer) {
     }
 }
 
-/* AI move computation - standard minimax (no negamax) */
+/**
+ * Compute the best AI move using the shared AI engine
+ * 
+ * INTEGRATED VERSION: This function now delegates to chess_ai_compute_move()
+ * from the shared chess_ai_move module. This ensures that both the DOS/Allegro
+ * and GTK versions use identical AI logic, eliminating code duplication and
+ * reducing maintenance burden.
+ * 
+ * The shared module handles:
+ * - Move generation and evaluation
+ * - Minimax with alpha-beta pruning
+ * - Candidate move collection within threshold
+ * - Random move selection for variety
+ */
 ChessMove compute_ai_move() {
-    ChessMove moves[256];
     ChessMove best_move = {-1, -1, -1, -1, 0};
-    int num_moves = chess_get_all_moves(&chess_gui.game, chess_gui.game.turn, moves);
     
-    if (num_moves == 0) {
-        return best_move;
-    }
+    /* Get default AI configuration from shared module */
+    ChessAIConfig config = chess_ai_get_default_config();
     
-    chess_gui.ai_search_depth = 3;  /* Search depth */
-    ai_eval_counter = 0;
+    /* Optional: Override defaults if needed
+     * config.search_depth = 4;              // Deeper search for stronger play
+     * config.threshold_centipawns = 25;     // Moves within 25cp of best
+     * config.use_randomization = true;      // Enable move variety
+     */
     
-    /* Determine if current player is white or black
-     * White maximizes (wants positive scores)
-     * Black minimizes (wants negative scores) */
-    bool we_are_white = (chess_gui.game.turn == WHITE);
-    int best_score = we_are_white ? INT_MIN : INT_MAX;
+    /* Call the shared AI engine - this performs all move evaluation */
+    ChessAIMoveResult result = chess_ai_compute_move(&chess_gui.game, config);
     
-    for (int i = 0; i < num_moves; i++) {
-        ChessGameState temp = chess_gui.game;
-        chess_make_move(&temp, moves[i]);
-        
-        /* Skip if move leaves king in check */
-        if (chess_is_in_check(&temp, chess_gui.game.turn)) {
-            continue;
-        }
-        
-        /* Call minimax with opposite goal for opponent
-         * If we're white (maximizing), opponent will be black (minimizing)
-         * If we're black (minimizing), opponent will be white (maximizing) */
-        bool opponent_is_white = (temp.turn == WHITE);
-        int score = chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
-        
-        /* Update best move based on whether we're maximizing or minimizing */
-        if (we_are_white) {
-            /* White maximizes */
-            if (score > best_score) {
-                best_score = score;
-                best_move = moves[i];
-            }
-        } else {
-            /* Black minimizes */
-            if (score < best_score) {
-                best_score = score;
-                best_move = moves[i];
-            }
-        }
-        
-        /* Update progress */
-        chess_gui.ai_evaluated_moves = i + 1;
-        chess_gui.ai_total_moves = num_moves;
-    }
+    /* Update GUI state with AI evaluation metadata */
+    chess_gui.ai_total_moves = result.total_moves_evaluated;
+    chess_gui.ai_evaluated_moves = result.total_moves_evaluated;
+    chess_gui.ai_search_depth = config.search_depth;
     
-    /* Non-deterministic move selection: collect moves within 25 centipawns of best */
-    typedef struct {
-        ChessMove move;
-        int score;
-    } ScoredMove;
-    
-    ScoredMove candidate_moves[256];
-    int candidate_count = 0;
-    int threshold = 25;  /* 25 centipawns */
-    
-    for (int i = 0; i < num_moves; i++) {
-        ChessGameState temp = chess_gui.game;
-        chess_make_move(&temp, moves[i]);
-        
-        /* Skip if move leaves king in check */
-        if (chess_is_in_check(&temp, chess_gui.game.turn)) {
-            continue;
-        }
-        
-        bool opponent_is_white = (temp.turn == WHITE);
-        int score = chess_minimax(&temp, chess_gui.ai_search_depth - 1, INT_MIN, INT_MAX, opponent_is_white);
-        
-        /* Check if within threshold */
-        bool is_close = false;
-        if (we_are_white) {
-            is_close = (score >= best_score - threshold);
-        } else {
-            is_close = (score <= best_score + threshold);
-        }
-        
-        if (is_close) {
-            candidate_moves[candidate_count].move = moves[i];
-            candidate_moves[candidate_count].score = score;
-            candidate_count++;
-        }
-    }
-    
-    /* Randomly pick from candidates */
-    if (candidate_count > 0) {
-        int choice = rand() % candidate_count;
-        best_move = candidate_moves[choice].move;
-    }
-    
-    return best_move;
+    /* Return the selected move */
+    return result.move;
 }
 
 /* ============================================================================
