@@ -1,0 +1,31 @@
+# Makefile for BeatChess on Linux with Allegro 4
+# Uses the same simple approach as WarpNES
+
+CXX = g++
+CXXFLAGS = -O3 -Wall -fomit-frame-pointer -DMSDOS -fpermissive -s
+
+# Source files
+SRCS = beatchess_dos.cpp beatchess.cpp chess_ai_move.cpp pgn.cpp
+OBJS = $(SRCS:.cpp=.o)
+TARGET = beatchess
+
+# Allegro 4 paths (same as WarpNES)
+ALLEGRO_CFLAGS = -I/usr/include
+ALLEGRO_LIBS = -lalleg -lm
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	@echo "Linking..."
+	$(CXX) $(OBJS) $(ALLEGRO_LIBS) -o $@
+	@echo "✅ Build complete: ./$(TARGET)"
+
+%.o: %.cpp
+	@echo "Compiling $<..."
+	$(CXX) $(CXXFLAGS) $(ALLEGRO_CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+	@echo "✅ Clean complete"
+
+.PHONY: all clean
