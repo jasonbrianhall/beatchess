@@ -144,6 +144,10 @@ int prev_mouse_y = -1;
 /* Help menu dropdown state (separate from show_help screen) */
 bool show_help_menu_dropdown = false;
 
+/* Close button state (Linux only) */
+volatile bool window_close_requested = false;
+
+
 /* ============================================================================
  * File Browser Structures
  * ============================================================================ */
@@ -363,7 +367,11 @@ void init_chess_game() {
     chess_gui.ai_move_delay = 15;
     chess_gui.ai_thinking = false;
     chess_gui.ai_computing = false;
+#ifdef LINUX_BUILD
+    chess_gui.ai_search_depth = 6;   // default depth
+#else
     chess_gui.ai_search_depth = 3;   // default depth
+#endif
     chess_gui.ai_total_moves = 0;
     chess_gui.ai_evaluated_moves = 0;
     chess_gui.ai_best_move.from_row = -1;
@@ -806,7 +814,11 @@ void draw_menu_bar() {
     textout_ex(screen, font, "Help", 50, 5, COLOR_WHITE, -1);
     
     /* Title */
+#ifdef LINUX_BUILD
+    textout_ex(screen, font, "BeatChess - Allegro Edition", 200, 5, COLOR_YELLOW, -1);
+#else
     textout_ex(screen, font, "BeatChess - DOS Edition", 200, 5, COLOR_YELLOW, -1);
+#endif
     
     /* Draw File dropdown menu if active */
     if (chess_gui.show_menu) {
@@ -1980,11 +1992,20 @@ void update_menu_selection(int my) {
 }
 
 /* ============================================================================
+ * Close Button Callback (Linux only)
+ * ============================================================================
+ */
+void close_button_callback(void) {
+    window_close_requested = true;
+}
+
+/* ============================================================================
  * Main function
  * ============================================================================
  */
 
 int main(void) {
+
     /* Initialize Allegro */
     if (allegro_init() != 0) {
         printf("Failed to initialize Allegro\n");
@@ -1993,10 +2014,6 @@ int main(void) {
     
     install_keyboard();
     
-    #ifdef LINUX_BUILD
-    /* On Linux, we may need to explicitly request keyboard input after showing window */
-    /* The game window should capture keyboard input when visible */
-    #endif
     install_mouse();
     install_timer();
     init_chess_game();
@@ -2022,6 +2039,11 @@ int main(void) {
         printf("Error setting graphics mode\n");
         return 1;
     }
+    
+    /* Register close button callback (Linux only) */
+    #ifdef LINUX_BUILD
+    set_close_button_callback(close_button_callback);
+    #endif
     
     /* Set up custom palette colors for better board appearance */
     RGB light_square, dark_square;
@@ -2069,6 +2091,13 @@ int main(void) {
     
     /* Game loop */
     while (running) {
+        /* Check for window close button (Linux only) */
+        #ifdef LINUX_BUILD
+        if (window_close_requested) {
+            running = false;
+        }
+        #endif
+        
         /* Update check/checkmate/stalemate display */
         
         /* Detect check (only during actual gameplay) */
