@@ -2004,13 +2004,21 @@ int main(void) {
     srand((unsigned int)time(NULL));
     
     /* Set graphics mode */
-    #ifdef LINUX_BUILD
-    /* On Linux, use windowed mode for better keyboard focus and development */
-    if (set_gfx_mode(GFX_AUTODETECT_WINDOWED, 640, 480, 0, 0) != 0) {
+    int gfx_result = -1;
+    
+    #ifdef __linux__
+    /* On Linux, try windowed mode first */
+    gfx_result = set_gfx_mode(GFX_AUTODETECT_WINDOWED, 640, 480, 0, 0);
+    if (gfx_result != 0) {
+        /* Fallback to autodetect if windowed fails */
+        gfx_result = set_gfx_mode(GFX_AUTODETECT, 640, 480, 0, 0);
+    }
     #else
-    /* On DOS, use fullscreen */
-    if (set_gfx_mode(GFX_AUTODETECT, 640, 480, 0, 0) != 0) {
+    /* On DOS, use fullscreen autodetect */
+    gfx_result = set_gfx_mode(GFX_AUTODETECT, 640, 480, 0, 0);
     #endif
+    
+    if (gfx_result != 0) {
         printf("Error setting graphics mode\n");
         return 1;
     }
