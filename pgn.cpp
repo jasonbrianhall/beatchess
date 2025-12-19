@@ -126,6 +126,31 @@ bool pgn_import_game(BeatChessVisualization *chess, const char *filename) {
 }
 
 /**
+ * Print chess board using UTF-8 piece symbols
+ */
+void print_board_utf8(ChessGameState *game) {
+    const char *white_pieces[] = {" ", "♟", "♞", "♝", "♜", "♛", "♚"};
+    const char *black_pieces[] = {" ", "♙", "♘", "♗", "♖", "♕", "♔"};
+    
+    printf("  a b c d e f g h\n");
+    for (int row = 7; row >= 0; row--) {
+        printf("%d ", row + 1);
+        for (int col = 0; col < 8; col++) {
+            ChessPiece piece = game->board[row][col];
+            if (piece.type == EMPTY) {
+                printf(". ");
+            } else if (piece.color == WHITE) {
+                printf("%s ", white_pieces[piece.type]);
+            } else {
+                printf("%s ", black_pieces[piece.type]);
+            }
+        }
+        printf("%d\n", row + 1);
+    }
+    printf("  a b c d e f g h\n");
+}
+
+/**
  * Convert a move to algebraic notation
  * Handles regular moves, captures, castling
  */
@@ -136,6 +161,10 @@ void move_to_algebraic(ChessGameState *game, ChessMove move, char *notation) {
     }
     
     ChessPiece piece = game->board[move.from_row][move.from_col];
+    
+    printf("\n--- BOARD STATE ---\n");
+    print_board_utf8(game);
+    printf("Move: [%d,%d] -> [%d,%d]\n", move.from_row, move.from_col, move.to_row, move.to_col);
     
     // Get piece character based on actual enum value
     char piece_char;
@@ -180,4 +209,5 @@ void move_to_algebraic(ChessGameState *game, ChessMove move, char *notation) {
     } else {
         snprintf(notation, 20, "%c%c", to_file, to_rank);
     }
+    printf("Notation: %s\n\n", notation);
 }

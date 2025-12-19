@@ -1131,7 +1131,7 @@ void draw_about_screen() {
  * ============================================================================ */
 
 /**
- * Scan directory for .bin files
+ * Scan directory for .sav files
  */
 int scan_files(const char *pattern, FileList *file_list) {
     struct ffblk ff;
@@ -1302,7 +1302,7 @@ void dos_save_game_dialog() {
     bool dialog_dirty = true;
     int prev_mouse_b_dialog = 0;
     
-    scan_files("*.bin", &file_list);
+    scan_files("*.sav", &file_list);
     
     while (1) {
         /* Update mouse position and button state */
@@ -1313,7 +1313,7 @@ void dos_save_game_dialog() {
             clear_to_color(screen, COLOR_BLACK);
             
             draw_file_list(&file_list, 1);
-            draw_filename_input("Or enter new filename (.bin will be added):", 
+            draw_filename_input("Or enter new filename (.sav will be added):", 
                                custom_filename, input_pos);
             draw_dialog_help(1);
             
@@ -1408,8 +1408,8 @@ void dos_save_game_dialog() {
     char filename[MAX_FILENAME_LEN];
     if (result == -2) {
         snprintf(filename, sizeof(filename), "%s", custom_filename);
-        if (!strstr(filename, ".bin")) {
-            strcat(filename, ".bin");
+        if (!strstr(filename, ".sav")) {
+            strcat(filename, ".sav");
         }
     } else {
         strncpy(filename, file_list.files[result].filename, sizeof(filename) - 1);
@@ -1474,7 +1474,7 @@ void dos_load_game_dialog() {
     bool dialog_dirty = true;
     int prev_mouse_b_dialog = 0;
     
-    scan_files("*.bin", &file_list);
+    scan_files("*.sav", &file_list);
     
     if (file_list.file_count == 0) {
         clear_to_color(screen, COLOR_BLACK);

@@ -49,8 +49,16 @@ bool export_to_pgn(BeatChessVisualization *chess, const char *output_filename) {
         MoveHistory hist = chess->move_history[i];
         ChessMove move = hist.move;
         
+        // Skip null moves (from == to)
+        if (move.from_row == move.to_row && move.from_col == move.to_col) {
+            continue;
+        }
+        
+        // Use the game_state BEFORE the move was made (from previous entry or initial)
+        ChessGameState *state_for_move = (i == 0) ? &game_state : &chess->move_history[i-1].game_state;
+        
         // Write move number at start of white's move
-        if (game_state.turn == WHITE) {
+        if (state_for_move->turn == WHITE) {
             if (moves_written_this_line >= 4) {
                 fprintf(f, "\n");
                 moves_written_this_line = 0;
@@ -58,14 +66,14 @@ bool export_to_pgn(BeatChessVisualization *chess, const char *output_filename) {
             fprintf(f, "%d. ", move_num);
         }
         
-        // Convert move to algebraic notation
+        // Convert move to algebraic notation using the pre-move state
         char notation[20] = {0};
-        move_to_algebraic(&game_state, move, notation);
+        move_to_algebraic(state_for_move, move, notation);
         fprintf(f, "%s ", notation);
         moves_written_this_line++;
         
-        // Execute the move on our reconstruction
-        chess_make_move(&game_state, move);
+        // After processing, the game_state is the one from this entry
+        game_state = hist.game_state;
         
         // Increment move number after black's move
         if (game_state.turn == WHITE) {
