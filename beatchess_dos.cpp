@@ -407,6 +407,11 @@ void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to
         return;
     }
     
+    /* Calculate elapsed time since move started */
+    clock_t current_time = clock();
+    long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
+    double elapsed_seconds = elapsed_ms / 1000.0;
+    
     /* Store at current write position */
     //printToSerial("DEBUG: Saving move at index %d\n", chess_gui.move_history_index);
     chess_gui.history[chess_gui.move_history_index] = chess_gui.game;
@@ -415,7 +420,7 @@ void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to
     chess_gui.move_history[chess_gui.move_history_index].move.from_col = from_c;
     chess_gui.move_history[chess_gui.move_history_index].move.to_row = to_r;
     chess_gui.move_history[chess_gui.move_history_index].move.to_col = to_c;
-    chess_gui.move_history[chess_gui.move_history_index].time_elapsed = 0;
+    chess_gui.move_history[chess_gui.move_history_index].time_elapsed = elapsed_seconds;  /* Save actual elapsed time! */
     
     /* Increment counters together - keep them in sync */
     chess_gui.move_history_index++;
@@ -454,11 +459,15 @@ void recalculate_timers_from_history() {
         }
     }
     
-    /* Reset current move timer to now */
-    chess_gui.current_move_start_time = clock();
-    chess_gui.last_move_end_time = clock();
-    chess_gui.white_time_milliseconds = chess_gui.white_total_time;
-    chess_gui.black_time_milliseconds = chess_gui.black_total_time;
+    /* Reset current move timer to now - this starts the timer for the next move to be made */
+    /* Do NOT update the display values here - they will be updated in the main loop */
+    clock_t now = clock();
+    chess_gui.current_move_start_time = now;
+    chess_gui.last_move_end_time = now;
+    
+    /* Sync display to show the accumulated times only (not including current move yet) */
+    chess_gui.white_time_milliseconds = (long)(chess_gui.white_total_time * 1000.0);
+    chess_gui.black_time_milliseconds = (long)(chess_gui.black_total_time * 1000.0);
 }
 
 void undo_move() {
@@ -2053,13 +2062,13 @@ int main(void) {
                             /* Black just moved - save black's total time and reset timer for white */
                             clock_t current_time = clock();
                             long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
-                            chess_gui.black_total_time += elapsed_ms;
+                            chess_gui.black_total_time += (elapsed_ms / 1000.0);  /* Convert ms to seconds before adding */
                             chess_gui.current_move_start_time = current_time;
                         } else {
                             /* White just moved - save white's total time and reset timer for black */
                             clock_t current_time = clock();
                             long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
-                            chess_gui.white_total_time += elapsed_ms;
+                            chess_gui.white_total_time += (elapsed_ms / 1000.0);  /* Convert ms to seconds before adding */
                             chess_gui.current_move_start_time = current_time;
                         }
                         
@@ -2139,9 +2148,11 @@ int main(void) {
             
             /* Add elapsed time to the current player's time */
             if (chess_gui.game.turn == WHITE) {
-                chess_gui.white_time_milliseconds = chess_gui.white_total_time + elapsed_ms;
+                /* Convert white_total_time from seconds to milliseconds and add elapsed */
+                chess_gui.white_time_milliseconds = (long)(chess_gui.white_total_time * 1000.0) + elapsed_ms;
             } else {
-                chess_gui.black_time_milliseconds = chess_gui.black_total_time + elapsed_ms;
+                /* Convert black_total_time from seconds to milliseconds and add elapsed */
+                chess_gui.black_time_milliseconds = (long)(chess_gui.black_total_time * 1000.0) + elapsed_ms;
             }
         }
         
@@ -2571,7 +2582,7 @@ int main(void) {
                                     /* Update total time for the player who just moved (white) */
                                     clock_t current_time = clock();
                                     long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
-                                    chess_gui.white_total_time += elapsed_ms;
+                                    chess_gui.white_total_time += (elapsed_ms / 1000.0);  /* Convert ms to seconds before adding */
                                     chess_gui.current_move_start_time = current_time;
                                     
                                     /* Turn is switched by chess_make_move */

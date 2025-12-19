@@ -8,11 +8,11 @@
 #include "beatchess.h"
 
 bool ensure_bin_extension(char *filename, size_t bufsize) {
-    const char *ext = ".bin";
+    const char *ext = ".sav";
     size_t len_f = strlen(filename);
     size_t len_e = strlen(ext);
 
-    // Case-insensitive check: .bin, .BIN, .Bin, etc.
+    // Case-insensitive check: .sav, .sav, .sav, etc.
     if (len_f >= len_e &&
         strcasecmp(filename + (len_f - len_e), ext) == 0)
         return true;
@@ -21,7 +21,7 @@ bool ensure_bin_extension(char *filename, size_t bufsize) {
     if (len_f + len_e + 1 > bufsize)
         return false;
 
-    // Append .bin
+    // Append .sav
     memcpy(filename + len_f, ext, len_e + 1);
     return true;
 }
@@ -39,9 +39,9 @@ bool pgn_export_game(BeatChessVisualization *chess, const char *filename,
     strncpy(base_filename, filename, sizeof(base_filename) - 1);
     base_filename[sizeof(base_filename) - 1] = '\0';
 
-    // Strip .bin (case-insensitive)
+    // Strip .sav (case-insensitive)
     size_t len = strlen(base_filename);
-    const char *ext = ".bin";
+    const char *ext = ".sav";
     size_t ext_len = strlen(ext);
 
     if (len >= ext_len &&
@@ -50,9 +50,9 @@ bool pgn_export_game(BeatChessVisualization *chess, const char *filename,
         base_filename[len - ext_len] = '\0';
     }
 
-    // Build final .bin filename
+    // Build final .sav filename
     char bin_filename[256];
-    if (snprintf(bin_filename, sizeof(bin_filename), "%s.bin", base_filename)
+    if (snprintf(bin_filename, sizeof(bin_filename), "%s.sav", base_filename)
         >= sizeof(bin_filename))
     {
         fprintf(stderr, "Error: filename too long\n");
@@ -84,7 +84,7 @@ bool pgn_import_game(BeatChessVisualization *chess, const char *filename) {
     bin_filename[sizeof(bin_filename) - 1] = '\0';
 
     if (!ensure_bin_extension(bin_filename, sizeof(bin_filename))) {
-        fprintf(stderr, "Error: filename too long to append .bin\n");
+        fprintf(stderr, "Error: filename too long to append .sav\n");
         return false;
     }
 
