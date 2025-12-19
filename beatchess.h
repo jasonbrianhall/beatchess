@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 /* Platform detection and conditional includes */
 #ifdef MSDOS
@@ -293,12 +294,10 @@ typedef struct {
     int ai_total_moves;
     int ai_evaluated_moves;
     
-    int white_time_seconds;
-    int white_time_frames;
-    int black_time_seconds;
-    int black_time_frames;
+    long white_time_milliseconds;  /* Total time elapsed for white (in milliseconds) */
+    long black_time_milliseconds;  /* Total time elapsed for black (in milliseconds) */
     bool timer_started;
-    int ai_thinking_start_time;
+    clock_t ai_thinking_start_time;
     
     bool is_in_check;
     double check_display_timer;
@@ -311,8 +310,8 @@ typedef struct {
     
     double white_total_time;
     double black_total_time;
-    double current_move_start_time;
-    double last_move_end_time;
+    clock_t current_move_start_time;    /* Clock time when current move started */
+    clock_t last_move_end_time;         /* Clock time when last move ended */
     
 } ChessGUI;
 

@@ -330,17 +330,15 @@ void init_chess_game() {
     chess_gui.ai_best_move.to_col = -1;
     chess_gui.ai_best_move.score = 0;
 
-    /* Reset timers */
-    chess_gui.white_time_seconds = 0;
-    chess_gui.white_time_frames = 0;
-    chess_gui.black_time_seconds = 0;
-    chess_gui.black_time_frames = 0;
+    /* Reset timers to use proper clock_t and milliseconds */
+    chess_gui.white_time_milliseconds = 0;
+    chess_gui.black_time_milliseconds = 0;
     chess_gui.timer_started = false;
-    chess_gui.ai_thinking_start_time = 0;
+    chess_gui.ai_thinking_start_time = clock();
     chess_gui.white_total_time = 0;
     chess_gui.black_total_time = 0;
-    chess_gui.current_move_start_time = 0;
-    chess_gui.last_move_end_time = 0;
+    chess_gui.current_move_start_time = clock();
+    chess_gui.last_move_end_time = clock();
     chess_gui.history_capacity = MAX_MOVE_HISTORY*2;
     /* Reset check/checkmate/stalemate flags */
     chess_gui.is_in_check = false;
@@ -855,16 +853,20 @@ void draw_side_panel() {
     int timer_y = info_y + 85;
     textout_ex(screen, font, "Time Elapsed:", BUTTON_PANEL_X, timer_y, COLOR_YELLOW, -1);
     
-    /* White time */
-    int white_mins = chess_gui.white_time_seconds / 60;
-    int white_secs = chess_gui.white_time_seconds % 60;
-    snprintf(buf, 64, "White: %d:%02d", white_mins, white_secs);
+    /* White time - display as MM:SS.mmm (milliseconds with 3 decimal places) */
+    long white_total_ms = chess_gui.white_time_milliseconds;
+    int white_mins = white_total_ms / 60000;
+    int white_secs = (white_total_ms % 60000) / 1000;
+    int white_ms = white_total_ms % 1000;
+    snprintf(buf, 64, "White: %d:%02d", white_mins, white_secs, white_ms);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 15, COLOR_WHITE, -1);
     
-    /* Black time */
-    int black_mins = chess_gui.black_time_seconds / 60;
-    int black_secs = chess_gui.black_time_seconds % 60;
-    snprintf(buf, 64, "Black: %d:%02d", black_mins, black_secs);
+    /* Black time - display as MM:SS.mmm (milliseconds with 3 decimal places) */
+    long black_total_ms = chess_gui.black_time_milliseconds;
+    int black_mins = black_total_ms / 60000;
+    int black_secs = (black_total_ms % 60000) / 1000;
+    int black_ms = black_total_ms % 1000;
+    snprintf(buf, 64, "Black: %d:%02d", black_mins, black_secs, black_ms);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 30, COLOR_WHITE, -1);
     
     /* AI thinking indicator */
@@ -1972,30 +1974,22 @@ int main(void) {
                 /* In DOS, AI computation will block, but this is necessary for strong play.
                  * The AI evaluates thousands of positions via minimax search.
                  * On modern CPUs via DOSBox, this typically takes 1-2 seconds. */
+                clock_t ai_start_time = clock();
                 ChessMove ai_move = compute_ai_move();
+                clock_t ai_end_time = clock();
                 
                 chess_gui.ai_computing = false;  /* Done computing */
                 
-                /* Calculate elapsed time during AI thinking using retrace counter */
+                /* Calculate elapsed time during AI thinking using system clock */
                 if (chess_gui.timer_started) {
-                    int elapsed_retraces = retrace_count - start_retrace;
-                    /* Assuming ~70 retraces per second (typical VGA), convert to our frame units */
-                    /* We use 100 frames = 1 second, so scale: elapsed_retraces * (100/70) */
-                    int elapsed_frames = (elapsed_retraces * 10) / 7;
+                    /* Convert clock ticks to milliseconds */
+                    long elapsed_ms = (long)((ai_end_time - ai_start_time) * 1000.0 / CLOCKS_PER_SEC);
                     
-                    /* Add elapsed time to the AI's color */
+                    /* Add elapsed time to the appropriate player's time */
                     if (chess_gui.game.turn == WHITE) {
-                        chess_gui.white_time_frames += elapsed_frames;
-                        while (chess_gui.white_time_frames >= 100) {
-                            chess_gui.white_time_frames -= 100;
-                            chess_gui.white_time_seconds++;
-                        }
+                        chess_gui.white_time_milliseconds += elapsed_ms;
                     } else {
-                        chess_gui.black_time_frames += elapsed_frames;
-                        while (chess_gui.black_time_frames >= 100) {
-                            chess_gui.black_time_frames -= 100;
-                            chess_gui.black_time_seconds++;
-                        }
+                        chess_gui.black_time_milliseconds += elapsed_ms;
                     }
                 }
                 
@@ -2019,6 +2013,22 @@ int main(void) {
                         save_position_to_history_with_move(ai_move.from_row, ai_move.from_col, 
                                                             ai_move.to_row, ai_move.to_col);
                         chess_gui.move_count++;  /* Increment move counter after move is committed */
+                        
+                        /* Update total time for the player who just moved */
+                        if (chess_gui.game.turn == WHITE) {
+                            /* Black just moved - save black's total time and reset timer for white */
+                            clock_t current_time = clock();
+                            long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
+                            chess_gui.black_total_time += elapsed_ms;
+                            chess_gui.current_move_start_time = current_time;
+                        } else {
+                            /* White just moved - save white's total time and reset timer for black */
+                            clock_t current_time = clock();
+                            long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
+                            chess_gui.white_total_time += elapsed_ms;
+                            chess_gui.current_move_start_time = current_time;
+                        }
+                        
                         mark_screen_dirty();  /* Mark screen dirty after AI move */
                         
                         /* Check for checkmate or stalemate */
@@ -2088,21 +2098,16 @@ int main(void) {
         
         update_menu_selection(safe_mouse_y);
         
-        /* Update timers - only after first move (when timer_started is true) */
+        /* Update timers - accumulate elapsed time since last move */
         if (chess_gui.timer_started) {
-            /* Increment frame counter for current player */
+            clock_t current_time = clock();
+            long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
+            
+            /* Add elapsed time to the current player's time */
             if (chess_gui.game.turn == WHITE) {
-                chess_gui.white_time_frames++;
-                if (chess_gui.white_time_frames >= 100) {  /* 100 frames * 10ms = 1 second */
-                    chess_gui.white_time_frames = 0;
-                    chess_gui.white_time_seconds++;
-                }
+                chess_gui.white_time_milliseconds = chess_gui.white_total_time + elapsed_ms;
             } else {
-                chess_gui.black_time_frames++;
-                if (chess_gui.black_time_frames >= 100) {
-                    chess_gui.black_time_frames = 0;
-                    chess_gui.black_time_seconds++;
-                }
+                chess_gui.black_time_milliseconds = chess_gui.black_total_time + elapsed_ms;
             }
         }
         
@@ -2528,6 +2533,13 @@ int main(void) {
                                                                         chess_gui.selected_col,
                                                                         row, col);
                                     chess_gui.move_count++;  /* Increment move counter after move is committed */
+                                    
+                                    /* Update total time for the player who just moved (white) */
+                                    clock_t current_time = clock();
+                                    long elapsed_ms = (long)((current_time - chess_gui.current_move_start_time) * 1000.0 / CLOCKS_PER_SEC);
+                                    chess_gui.white_total_time += elapsed_ms;
+                                    chess_gui.current_move_start_time = current_time;
+                                    
                                     /* Turn is switched by chess_make_move */
                                     chess_gui.ai_move_counter = 0;  /* Reset AI timer */
                                     mark_screen_dirty();  /* Mark screen dirty after move */
