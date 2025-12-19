@@ -1209,14 +1209,14 @@ void draw_filename_input(const char *prompt, const char *input, int cursor_pos) 
 void draw_dialog_help(int is_save_mode) {
     int help_y = FILE_LIST_Y + FILE_LIST_HEIGHT + 120;
     
-    textout_ex(screen, font, "UP/DOWN - Browse files", FILE_LIST_X, help_y, 
+    textout_ex(screen, font, "UP/DOWN - Browse files | CLICK - Select file", FILE_LIST_X, help_y, 
                COLOR_GREEN, -1);
     
     if (is_save_mode) {
         textout_ex(screen, font, "ENTER - Save with selected/new name", FILE_LIST_X, help_y + 15, 
                    COLOR_GREEN, -1);
     } else {
-        textout_ex(screen, font, "ENTER - Load selected file", FILE_LIST_X, help_y + 15, 
+        textout_ex(screen, font, "ENTER - Load | DOUBLE-CLICK - Quick load", FILE_LIST_X, help_y + 15, 
                    COLOR_GREEN, -1);
     }
     
@@ -1250,7 +1250,7 @@ void handle_file_list_input(FileList *file_list, int key) {
 }
 
 /**
- * Enhanced Save Game Dialog
+ * Enhanced Save Game Dialog with Mouse Click Support
  */
 void dos_save_game_dialog() {
     FileList file_list;
@@ -1258,10 +1258,14 @@ void dos_save_game_dialog() {
     int input_pos = 0;
     int result = -1;
     bool dialog_dirty = true;
+    int prev_mouse_b_dialog = 0;
     
     scan_files("*.bin", &file_list);
     
     while (1) {
+        /* Update mouse position and button state */
+        poll_mouse();
+        
         /* Only redraw if needed */
         if (dialog_dirty) {
             clear_to_color(screen, COLOR_BLACK);
@@ -1274,6 +1278,37 @@ void dos_save_game_dialog() {
             vsync();
             dialog_dirty = false;
         }
+        
+        /* Handle mouse clicks on file list */
+        if ((mouse_b & 1) && !(prev_mouse_b_dialog & 1)) {  /* Left button just pressed */
+            int mx = mouse_x;
+            int my = mouse_y;
+            
+            /* Validate bounds */
+            if (mx < 0) mx = 0;
+            if (mx >= 640) mx = 639;
+            if (my < 0) my = 0;
+            if (my >= 480) my = 479;
+            
+            /* Check if clicking on file list items */
+            if (mx >= FILE_LIST_X && mx < FILE_LIST_X + FILE_LIST_WIDTH &&
+                my >= FILE_LIST_Y && my < FILE_LIST_Y + FILE_LIST_HEIGHT) {
+                
+                /* Calculate which file item was clicked */
+                int item_index = (my - FILE_LIST_Y) / FILE_LIST_ITEM_HEIGHT;
+                int file_index = item_index + file_list.scroll_offset;
+                
+                /* Validate the index */
+                if (file_index >= 0 && file_index < file_list.file_count) {
+                    file_list.selected_index = file_index;
+                    memset(custom_filename, 0, sizeof(custom_filename));
+                    input_pos = 0;
+                    dialog_dirty = true;
+                }
+            }
+        }
+        
+        prev_mouse_b_dialog = mouse_b;
         
         if (keypressed()) {
             int key = readkey();
@@ -1363,17 +1398,39 @@ void dos_save_game_dialog() {
         textout_centre_ex(screen, font, "Error: Failed to save game", 320, 200, COLOR_RED, -1);
     }
     
-    textout_centre_ex(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW, -1);
-    readkey();
+    textout_centre_ex(screen, font, "Press any key or click to continue...", 320, 280, COLOR_YELLOW, -1);
+    vsync();
+    
+    /* Wait for either key press or mouse click */
+    int continue_pressed = 0;
+    int prev_mouse_b_continue = 0;
+    while (!continue_pressed) {
+        poll_mouse();
+        
+        /* Check for mouse click */
+        if ((mouse_b & 1) && !(prev_mouse_b_continue & 1)) {
+            continue_pressed = 1;
+        }
+        prev_mouse_b_continue = mouse_b;
+        
+        /* Check for key press */
+        if (keypressed()) {
+            readkey();
+            continue_pressed = 1;
+        }
+        
+        rest(10);
+    }
     mark_screen_needs_full_redraw();
 }
 
 /**
- * Enhanced Load Game Dialog
+ * Enhanced Load Game Dialog with Mouse Click Support
  */
 void dos_load_game_dialog() {
     FileList file_list;
     bool dialog_dirty = true;
+    int prev_mouse_b_dialog = 0;
     
     scan_files("*.bin", &file_list);
     
@@ -1381,13 +1438,37 @@ void dos_load_game_dialog() {
         clear_to_color(screen, COLOR_BLACK);
         textout_centre_ex(screen, font, "LOAD GAME", 320, 50, COLOR_YELLOW, -1);
         textout_centre_ex(screen, font, "No saved games found", 320, 200, COLOR_WHITE, -1);
-        textout_centre_ex(screen, font, "Press any key to continue...", 320, 280, COLOR_GREEN, -1);
-        readkey();
+        textout_centre_ex(screen, font, "Press any key or click to continue...", 320, 280, COLOR_GREEN, -1);
+        vsync();
+        
+        /* Wait for either key press or mouse click */
+        int continue_pressed = 0;
+        int prev_mouse_b_continue = 0;
+        while (!continue_pressed) {
+            poll_mouse();
+            
+            /* Check for mouse click */
+            if ((mouse_b & 1) && !(prev_mouse_b_continue & 1)) {
+                continue_pressed = 1;
+            }
+            prev_mouse_b_continue = mouse_b;
+            
+            /* Check for key press */
+            if (keypressed()) {
+                readkey();
+                continue_pressed = 1;
+            }
+            
+            rest(10);
+        }
         mark_screen_needs_full_redraw();
         return;
     }
     
     while (1) {
+        /* Update mouse position and button state */
+        poll_mouse();
+        
         /* Only redraw if needed */
         if (dialog_dirty) {
             clear_to_color(screen, COLOR_BLACK);
@@ -1398,6 +1479,49 @@ void dos_load_game_dialog() {
             vsync();
             dialog_dirty = false;
         }
+        
+        /* Handle mouse clicks on file list */
+        if ((mouse_b & 1) && !(prev_mouse_b_dialog & 1)) {  /* Left button just pressed */
+            int mx = mouse_x;
+            int my = mouse_y;
+            
+            /* Validate bounds */
+            if (mx < 0) mx = 0;
+            if (mx >= 640) mx = 639;
+            if (my < 0) my = 0;
+            if (my >= 480) my = 479;
+            
+            /* Check if clicking on file list items */
+            if (mx >= FILE_LIST_X && mx < FILE_LIST_X + FILE_LIST_WIDTH &&
+                my >= FILE_LIST_Y && my < FILE_LIST_Y + FILE_LIST_HEIGHT) {
+                
+                /* Calculate which file item was clicked */
+                int item_index = (my - FILE_LIST_Y) / FILE_LIST_ITEM_HEIGHT;
+                int file_index = item_index + file_list.scroll_offset;
+                
+                /* Validate the index */
+                if (file_index >= 0 && file_index < file_list.file_count) {
+                    file_list.selected_index = file_index;
+                    dialog_dirty = true;
+                    /* Double-click detection: if same file clicked twice quickly, load it */
+                    static int last_selected = -1;
+                    static int double_click_counter = 0;
+                    
+                    if (last_selected == file_index) {
+                        double_click_counter++;
+                        if (double_click_counter >= 1) {
+                            /* Double-click detected, load the file */
+                            break;
+                        }
+                    } else {
+                        last_selected = file_index;
+                        double_click_counter = 0;
+                    }
+                }
+            }
+        }
+        
+        prev_mouse_b_dialog = mouse_b;
         
         if (keypressed()) {
             int key = readkey();
@@ -1464,8 +1588,30 @@ void dos_load_game_dialog() {
         textout_centre_ex(screen, font, "Check filename and format", 320, 220, COLOR_RED, -1);
     }
     
-    textout_centre_ex(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW, -1);
-    readkey();
+    textout_centre_ex(screen, font, "Press any key or click to continue...", 320, 280, COLOR_YELLOW, -1);
+    vsync();
+    
+    /* Wait for either key press or mouse click */
+    int continue_pressed = 0;
+    int prev_mouse_b_continue = 0;
+    while (!continue_pressed) {
+        poll_mouse();
+        
+        /* Check for mouse click */
+        if ((mouse_b & 1) && !(prev_mouse_b_continue & 1)) {
+            continue_pressed = 1;
+        }
+        prev_mouse_b_continue = mouse_b;
+        
+        /* Check for key press */
+        if (keypressed()) {
+            readkey();
+            continue_pressed = 1;
+        }
+        
+        rest(10);
+    }
+    
     mark_screen_needs_full_redraw();
 }
 
