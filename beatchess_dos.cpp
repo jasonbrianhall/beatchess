@@ -84,6 +84,10 @@ BITMAP *active_buffer = NULL;
 bool screen_is_dirty = true;  /* Start dirty to force initial draw */
 bool screen_needs_full_redraw = true;  /* Force full redraw flag */
 
+/* Mouse position tracking */
+int prev_mouse_x = -1;
+int prev_mouse_y = -1;
+
 /* Help menu dropdown state (separate from show_help screen) */
 bool show_help_menu_dropdown = false;
 
@@ -1666,6 +1670,13 @@ int main(void) {
         /* Update mouse position for menu highlighting */
         poll_mouse();
         
+        /* Mark screen dirty if mouse moved */
+        if (mouse_x != prev_mouse_x || mouse_y != prev_mouse_y) {
+            mark_screen_dirty();
+            prev_mouse_x = mouse_x;
+            prev_mouse_y = mouse_y;
+        }
+        
         /* Bounds check mouse position before using it */
         int safe_mouse_y = mouse_y;
         if (safe_mouse_y < 0) safe_mouse_y = 0;
@@ -2019,6 +2030,8 @@ int main(void) {
         
         /* Handle mouse clicks */
         if ((mouse_b & 1) && !(prev_mouse_b & 1)) {  /* Left button just pressed */
+            mark_screen_dirty();  /* Mark dirty on any mouse click */
+            
             /* CRITICAL: Bounds check mouse coordinates FIRST */
             int mx = mouse_x;
             int my = mouse_y;
