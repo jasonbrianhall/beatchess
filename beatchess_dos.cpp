@@ -16,6 +16,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <time.h>
+#include <dir.h>
 
 /* ============================================================================
  * UI Definitions
@@ -34,6 +35,16 @@
 /* Menu bar */
 #define MENU_BAR_HEIGHT 20
 #define MENU_ITEM_WIDTH 80
+
+/* File Browser UI */
+#define MAX_FILES 100
+#define MAX_FILENAME_LEN 256
+#define LIST_VISIBLE_ITEMS 10
+#define FILE_LIST_X 50
+#define FILE_LIST_Y 80
+#define FILE_LIST_WIDTH 540
+#define FILE_LIST_ITEM_HEIGHT 25
+#define FILE_LIST_HEIGHT (LIST_VISIBLE_ITEMS * FILE_LIST_ITEM_HEIGHT)
 
 /* Define custom colors for chess board (green and cream/beige) */
 #define LIGHT_SQUARE 15   /* Light beige/cream color */
@@ -90,6 +101,22 @@ int prev_mouse_y = -1;
 
 /* Help menu dropdown state (separate from show_help screen) */
 bool show_help_menu_dropdown = false;
+
+/* ============================================================================
+ * File Browser Structures
+ * ============================================================================ */
+
+typedef struct {
+    char filename[MAX_FILENAME_LEN];
+    int is_directory;
+} FileEntry;
+
+typedef struct {
+    FileEntry files[MAX_FILES];
+    int file_count;
+    int selected_index;
+    int scroll_offset;
+} FileList;
 
 /**
  * Initialize triple buffering
@@ -1057,148 +1084,389 @@ void draw_about_screen() {
  * ============================================================================
  */
 
+/* ============================================================================
+ * File Browser Helper Functions
+ * ============================================================================ */
+
 /**
- * Simple text input for DOS - get a filename from user
+ * Scan directory for .bin files
  */
-void dos_input_string(char *buffer, int max_len, int x, int y) {
-    int pos = 0;
-    buffer[0] = '\0';
+int scan_files(const char *pattern, FileList *file_list) {
+    struct ffblk ff;
+    int done, count = 0;
+    
+    file_list->file_count = 0;
+    file_list->selected_index = 0;
+    file_list->scroll_offset = 0;
+    
+    done = findfirst(pattern, &ff, FA_ARCH);
+    
+    while (!done && count < MAX_FILES) {
+        if (!(ff.ff_attrib & FA_DIREC)) {
+            strncpy(file_list->files[count].filename, ff.ff_name, MAX_FILENAME_LEN - 1);
+            file_list->files[count].filename[MAX_FILENAME_LEN - 1] = '\0';
+            file_list->files[count].is_directory = 0;
+            count++;
+        }
+        done = findnext(&ff);
+    }
+    
+    file_list->file_count = count;
+    return count;
+}
+
+/**
+ * Draw the file list on screen
+ */
+void draw_file_list(FileList *file_list, int is_save_mode) {
+    int y = FILE_LIST_Y;
+    int i;
+    const char *title = is_save_mode ? "SAVE GAME - Select file or create new" 
+                                      : "LOAD GAME - Select a saved game";
+    
+    textout_centre_ex(screen, font, title, 320, 40, COLOR_YELLOW, -1);
+    
+    rect(screen, FILE_LIST_X - 2, FILE_LIST_Y - 2, 
+         FILE_LIST_X + FILE_LIST_WIDTH + 2, FILE_LIST_Y + FILE_LIST_HEIGHT + 2, 
+         COLOR_WHITE);
+    
+    rectfill(screen, FILE_LIST_X, FILE_LIST_Y - 20, 
+             FILE_LIST_X + FILE_LIST_WIDTH, FILE_LIST_Y - 1, COLOR_CYAN);
+    textout_ex(screen, font, "FILENAME", FILE_LIST_X + 10, FILE_LIST_Y - 18, 
+               COLOR_BLACK, -1);
+    
+    for (i = 0; i < LIST_VISIBLE_ITEMS && (i + file_list->scroll_offset) < file_list->file_count; i++) {
+        int file_idx = i + file_list->scroll_offset;
+        int text_y = y + i * FILE_LIST_ITEM_HEIGHT;
+        
+        int bg_color = (file_idx == file_list->selected_index) ? COLOR_CYAN : COLOR_BLACK;
+        int text_color = (file_idx == file_list->selected_index) ? COLOR_BLACK : COLOR_WHITE;
+        
+        rectfill(screen, FILE_LIST_X, text_y, 
+                 FILE_LIST_X + FILE_LIST_WIDTH, text_y + FILE_LIST_ITEM_HEIGHT - 1, 
+                 bg_color);
+        
+        char display_name[50];
+        strncpy(display_name, file_list->files[file_idx].filename, 49);
+        display_name[49] = '\0';
+        
+        textout_ex(screen, font, display_name, FILE_LIST_X + 10, text_y + 5, 
+                   text_color, -1);
+    }
+    
+    if (file_list->file_count == 0) {
+        textout_centre_ex(screen, font, "(No saved games found)", 
+                          FILE_LIST_X + FILE_LIST_WIDTH/2, 
+                          FILE_LIST_Y + FILE_LIST_HEIGHT/2 - 10, 
+                          COLOR_GRAY, -1);
+        
+        if (is_save_mode) {
+            textout_centre_ex(screen, font, "Enter a filename to create a new save", 
+                              FILE_LIST_X + FILE_LIST_WIDTH/2, 
+                              FILE_LIST_Y + FILE_LIST_HEIGHT/2 + 10, 
+                              COLOR_GRAY, -1);
+        }
+    }
+    
+    if (file_list->file_count > LIST_VISIBLE_ITEMS) {
+        char scroll_msg[64];
+        snprintf(scroll_msg, sizeof(scroll_msg), 
+                 "File %d of %d (use UP/DOWN arrows)", 
+                 file_list->selected_index + 1, 
+                 file_list->file_count);
+        textout_centre_ex(screen, font, scroll_msg, 320, 
+                          FILE_LIST_Y + FILE_LIST_HEIGHT + 20, 
+                          COLOR_CYAN, -1);
+    }
+}
+
+/**
+ * Draw input field for filename
+ */
+void draw_filename_input(const char *prompt, const char *input, int cursor_pos) {
+    int input_y = FILE_LIST_Y + FILE_LIST_HEIGHT + 60;
+    
+    textout_ex(screen, font, prompt, FILE_LIST_X, input_y, COLOR_WHITE, -1);
+    
+    rect(screen, FILE_LIST_X, input_y + 20, 
+         FILE_LIST_X + 400, input_y + 40, COLOR_WHITE);
+    
+    char display_input[50];
+    strncpy(display_input, input, 49);
+    display_input[49] = '\0';
+    textout_ex(screen, font, display_input, FILE_LIST_X + 5, input_y + 22, 
+               COLOR_YELLOW, -1);
+    
+    if (cursor_pos <= (int)strlen(input)) {
+        textout_ex(screen, font, "_", FILE_LIST_X + 5 + cursor_pos * 8, input_y + 22, 
+                   COLOR_CYAN, -1);
+    }
+}
+
+/**
+ * Draw help text
+ */
+void draw_dialog_help(int is_save_mode) {
+    int help_y = FILE_LIST_Y + FILE_LIST_HEIGHT + 120;
+    
+    textout_ex(screen, font, "UP/DOWN - Browse files", FILE_LIST_X, help_y, 
+               COLOR_GREEN, -1);
+    
+    if (is_save_mode) {
+        textout_ex(screen, font, "ENTER - Save with selected/new name", FILE_LIST_X, help_y + 15, 
+                   COLOR_GREEN, -1);
+    } else {
+        textout_ex(screen, font, "ENTER - Load selected file", FILE_LIST_X, help_y + 15, 
+                   COLOR_GREEN, -1);
+    }
+    
+    textout_ex(screen, font, "ESC - Cancel", FILE_LIST_X, help_y + 30, 
+               COLOR_GREEN, -1);
+}
+
+/**
+ * Handle file list navigation
+ */
+void handle_file_list_input(FileList *file_list, int key) {
+    switch (key) {
+        case KEY_UP:
+            if (file_list->selected_index > 0) {
+                file_list->selected_index--;
+                if (file_list->selected_index < file_list->scroll_offset) {
+                    file_list->scroll_offset = file_list->selected_index;
+                }
+            }
+            break;
+            
+        case KEY_DOWN:
+            if (file_list->selected_index < file_list->file_count - 1) {
+                file_list->selected_index++;
+                if (file_list->selected_index >= file_list->scroll_offset + LIST_VISIBLE_ITEMS) {
+                    file_list->scroll_offset = file_list->selected_index - LIST_VISIBLE_ITEMS + 1;
+                }
+            }
+            break;
+    }
+}
+
+/**
+ * Enhanced Save Game Dialog
+ */
+void dos_save_game_dialog() {
+    FileList file_list;
+    char custom_filename[MAX_FILENAME_LEN] = "";
+    int input_pos = 0;
+    int result = -1;
+    bool dialog_dirty = true;
+    
+    scan_files("*.bin", &file_list);
     
     while (1) {
-        /* Get keyboard input */
+        /* Only redraw if needed */
+        if (dialog_dirty) {
+            clear_to_color(screen, COLOR_BLACK);
+            
+            draw_file_list(&file_list, 1);
+            draw_filename_input("Or enter new filename (.bin will be added):", 
+                               custom_filename, input_pos);
+            draw_dialog_help(1);
+            
+            vsync();
+            dialog_dirty = false;
+        }
+        
         if (keypressed()) {
             int key = readkey();
             int key_code = key & 0xFF;
             int key_scan = key >> 8;
             
-            /* Enter key - accept input */
-            if (key_scan == KEY_ENTER || key_code == '\r') {
-                buffer[pos] = '\0';
-                break;
+            if (key_scan == KEY_UP || key_scan == KEY_DOWN) {
+                handle_file_list_input(&file_list, key_scan);
+                memset(custom_filename, 0, sizeof(custom_filename));
+                input_pos = 0;
+                dialog_dirty = true;
+                continue;
             }
             
-            /* Escape key - cancel */
             if (key_scan == KEY_ESC) {
-                buffer[0] = '\0';
+                result = -1;
                 break;
             }
             
-            /* Backspace */
-            if (key_scan == KEY_BACKSPACE && pos > 0) {
-                pos--;
-                buffer[pos] = '\0';
+            if (key_scan == KEY_ENTER || key_code == '\r') {
+                if (strlen(custom_filename) > 0) {
+                    result = -2;
+                } else if (file_list.file_count > 0 && file_list.selected_index < file_list.file_count) {
+                    result = file_list.selected_index;
+                } else {
+                    continue;
+                }
+                break;
             }
             
-            /* Regular character */
-            if (key_code >= 32 && key_code <= 126 && pos < max_len - 1) {
-                buffer[pos] = key_code;
-                pos++;
-                buffer[pos] = '\0';
+            if (key_scan == KEY_BACKSPACE && input_pos > 0) {
+                input_pos--;
+                custom_filename[input_pos] = '\0';
+                dialog_dirty = true;
+                continue;
+            }
+            
+            if (key_code >= 32 && key_code <= 126 && input_pos < MAX_FILENAME_LEN - 5) {
+                custom_filename[input_pos] = tolower(key_code);
+                input_pos++;
+                custom_filename[input_pos] = '\0';
+                dialog_dirty = true;
+                continue;
             }
         }
         
-        /* Redraw input line */
-        clear_to_color(screen, COLOR_BLACK);
-        textout(screen, font, "Enter filename:", 20, y, COLOR_WHITE);
-        textout(screen, font, buffer, 20, y + 20, COLOR_YELLOW);
-        textout(screen, font, "_", 20 + pos * 8, y + 20, COLOR_CYAN);
-        
-        vsync();
+        rest(10);
     }
-}
-
-/**
- * Save game dialog - called from menu
- */
-void dos_save_game_dialog() {
-    char filename[256];
     
-    /* Clear screen and show dialog */
-    clear_to_color(screen, COLOR_BLACK);
-    textout_centre(screen, font, "SAVE GAME", 320, 50, COLOR_YELLOW);
-    
-    /* Get filename from user */
-    dos_input_string(filename, sizeof(filename), 20, 150);
-    
-    if (strlen(filename) == 0) {
-        /* User cancelled */
+    if (result == -1) {
+        mark_screen_needs_full_redraw();
         return;
     }
-        
-    /* Try to save game */
+    
+    char filename[MAX_FILENAME_LEN];
+    if (result == -2) {
+        snprintf(filename, sizeof(filename), "%s", custom_filename);
+        if (!strstr(filename, ".bin")) {
+            strcat(filename, ".bin");
+        }
+    } else {
+        strncpy(filename, file_list.files[result].filename, sizeof(filename) - 1);
+    }
+    
+    /* Show saving message */
+    clear_to_color(screen, COLOR_BLACK);
+    textout_centre_ex(screen, font, "Saving game...", 320, 200, COLOR_YELLOW, -1);
+    vsync();
+    rest(500);  /* Brief pause to show message */
+    
     BeatChessVisualization chess_vis;
     chess_vis.game = chess_gui.game;
     chess_vis.move_history_count = chess_gui.move_history_count;
     chess_vis.move_count = chess_gui.move_count;
     
-    // Copy move history
     for (int i = 0; i < chess_gui.move_history_count && i < MAX_MOVE_HISTORY * 2; i++) {
         chess_vis.move_history[i] = chess_gui.move_history[i];
     }
     
-    /* Show status message */
     clear_to_color(screen, COLOR_BLACK);
-    
     if (pgn_export_game(&chess_vis, filename, "Human", "BeatChess AI")) {
-        textout_centre(screen, font, "Game saved successfully!", 320, 200, COLOR_GREEN);
+        textout_centre_ex(screen, font, "Game saved successfully!", 320, 200, COLOR_GREEN, -1);
         char msg[256];
         snprintf(msg, sizeof(msg), "File: %s", filename);
-        textout_centre(screen, font, msg, 320, 220, COLOR_WHITE);
+        textout_centre_ex(screen, font, msg, 320, 220, COLOR_WHITE, -1);
     } else {
-        textout_centre(screen, font, "Error: Failed to save game", 320, 200, COLOR_RED);
+        textout_centre_ex(screen, font, "Error: Failed to save game", 320, 200, COLOR_RED, -1);
     }
     
-    textout_centre(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW);
+    textout_centre_ex(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW, -1);
     readkey();
+    mark_screen_needs_full_redraw();
 }
 
 /**
- * Load game dialog - called from menu
+ * Enhanced Load Game Dialog
  */
 void dos_load_game_dialog() {
-    char filename[256];
+    FileList file_list;
+    bool dialog_dirty = true;
     
-    /* Clear screen and show dialog */
-    clear_to_color(screen, COLOR_BLACK);
-    textout_centre(screen, font, "LOAD GAME", 320, 50, COLOR_YELLOW);
+    scan_files("*.bin", &file_list);
     
-    /* Get filename from user */
-    dos_input_string(filename, sizeof(filename), 20, 150);
-    
-    if (strlen(filename) == 0) {
-        /* User cancelled */
+    if (file_list.file_count == 0) {
+        clear_to_color(screen, COLOR_BLACK);
+        textout_centre_ex(screen, font, "LOAD GAME", 320, 50, COLOR_YELLOW, -1);
+        textout_centre_ex(screen, font, "No saved games found", 320, 200, COLOR_WHITE, -1);
+        textout_centre_ex(screen, font, "Press any key to continue...", 320, 280, COLOR_GREEN, -1);
+        readkey();
+        mark_screen_needs_full_redraw();
         return;
     }
+    
+    while (1) {
+        /* Only redraw if needed */
+        if (dialog_dirty) {
+            clear_to_color(screen, COLOR_BLACK);
+            
+            draw_file_list(&file_list, 0);
+            draw_dialog_help(0);
+            
+            vsync();
+            dialog_dirty = false;
+        }
         
-    /* Show status message */
+        if (keypressed()) {
+            int key = readkey();
+            int key_code = key & 0xFF;
+            int key_scan = key >> 8;
+            
+            if (key_scan == KEY_UP || key_scan == KEY_DOWN) {
+                handle_file_list_input(&file_list, key_scan);
+                dialog_dirty = true;
+                continue;
+            }
+            
+            if (key_scan == KEY_ESC) {
+                mark_screen_needs_full_redraw();
+                return;
+            }
+            
+            if (key_scan == KEY_ENTER || key_code == '\r') {
+                if (file_list.selected_index < file_list.file_count) {
+                    break;
+                }
+                continue;
+            }
+        }
+        
+        rest(10);
+    }
+    
+    char filename[MAX_FILENAME_LEN];
+    strncpy(filename, file_list.files[file_list.selected_index].filename, 
+            sizeof(filename) - 1);
+    
+    /* Show loading message */
     clear_to_color(screen, COLOR_BLACK);
+    textout_centre_ex(screen, font, "Loading game...", 320, 200, COLOR_YELLOW, -1);
+    vsync();
+    rest(500);  /* Brief pause to show message */
     
     BeatChessVisualization chess_vis;
     chess_vis.game = chess_gui.game;
     chess_vis.move_history_count = 0;
     chess_vis.move_count = 0;
     
+    clear_to_color(screen, COLOR_BLACK);
+    
     if (pgn_import_game(&chess_vis, filename)) {
-        /* Success - copy game back to GUI */
         chess_gui.game = chess_vis.game;
         chess_gui.move_history_count = chess_vis.move_history_count;
         chess_gui.move_count = chess_vis.move_count;
+        chess_gui.history_size = chess_vis.move_history_count + 1;
+        chess_gui.move_history_index = chess_gui.history_size;
         
-        /* Copy move history */
         for (int i = 0; i < chess_vis.move_history_count && i < MAX_MOVE_HISTORY * 2; i++) {
             chess_gui.move_history[i] = chess_vis.move_history[i];
         }
         
-        textout_centre(screen, font, "Game loaded successfully!", 320, 200, COLOR_GREEN);
+        textout_centre_ex(screen, font, "Game loaded successfully!", 320, 200, COLOR_GREEN, -1);
         char msg[256];
-        snprintf(msg, sizeof(msg), "Loaded %d moves", chess_gui.move_history_count);
-        textout_centre(screen, font, msg, 320, 220, COLOR_WHITE);
+        snprintf(msg, sizeof(msg), "Loaded %d moves from %s", 
+                 chess_gui.move_history_count, filename);
+        textout_centre_ex(screen, font, msg, 320, 220, COLOR_WHITE, -1);
     } else {
-        textout_centre(screen, font, "Error: Failed to load game", 320, 200, COLOR_RED);
-        textout_centre(screen, font, "Check filename and format", 320, 220, COLOR_RED);
+        textout_centre_ex(screen, font, "Error: Failed to load game", 320, 200, COLOR_RED, -1);
+        textout_centre_ex(screen, font, "Check filename and format", 320, 220, COLOR_RED, -1);
     }
-    textout_centre(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW);
+    
+    textout_centre_ex(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW, -1);
     readkey();
+    mark_screen_needs_full_redraw();
 }
 
 /* ============================================================================

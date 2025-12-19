@@ -47,44 +47,67 @@ bool pgn_export_game(BeatChessVisualization *chess, const char *filename,
     return true;
 }
 
+bool ensure_bin_extension(char *filename, size_t bufsize) {
+    const char *ext = ".bin";
+    size_t len_f = strlen(filename);
+    size_t len_e = strlen(ext);
+
+    // Case-insensitive check: .bin, .BIN, .Bin, etc.
+    if (len_f >= len_e &&
+        strcasecmp(filename + (len_f - len_e), ext) == 0)
+        return true;
+
+    // Not enough room
+    if (len_f + len_e + 1 > bufsize)
+        return false;
+
+    // Append .bin
+    memcpy(filename + len_f, ext, len_e + 1);
+    return true;
+}
+
 bool pgn_import_game(BeatChessVisualization *chess, const char *filename) {
     char bin_filename[256];
-    snprintf(bin_filename, sizeof(bin_filename), "%s.bin", filename);
-    FILE *f = fopen(bin_filename, "rb");
-    if (!f) {
-        fprintf(stderr, "Error: Could not open %s\n", filename);
+    strncpy(bin_filename, filename, sizeof(bin_filename));
+    bin_filename[sizeof(bin_filename) - 1] = '\0';
+
+    if (!ensure_bin_extension(bin_filename, sizeof(bin_filename))) {
+        fprintf(stderr, "Error: filename too long to append .bin\n");
         return false;
     }
-    
-    // Read move count
+
+    FILE *f = fopen(bin_filename, "rb");
+    if (!f) {
+        fprintf(stderr, "Error: Could not open %s\n", bin_filename);
+        return false;
+    }
+
     int count = 0;
     if (fread(&count, sizeof(int), 1, f) != 1) {
         fprintf(stderr, "Error: Could not read move count\n");
         fclose(f);
         return false;
     }
-    
+
     if (count < 0 || count > MAX_MOVE_HISTORY) {
         fprintf(stderr, "Error: Invalid move count: %d\n", count);
         fclose(f);
         return false;
     }
-    
-    // Read move_history array
+
     if (fread(chess->move_history, sizeof(MoveHistory), count, f) != (size_t)count) {
         fprintf(stderr, "Error: Could not read move history\n");
         fclose(f);
         return false;
     }
-    
+
     chess->move_history_count = count;
-    
-    // Restore board to final position
+
     if (count > 0) {
         chess->game = chess->move_history[count - 1].game_state;
     }
-    
+
     fclose(f);
-    printf("Game loaded from: %s (%d moves)\n", filename, count);
+    printf("Game loaded from: %s (%d moves)\n", bin_filename, count);
     return true;
 }
