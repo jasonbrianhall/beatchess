@@ -16,7 +16,16 @@
 #include <ctype.h>
 #include <limits.h>
 #include <time.h>
-#include <dir.h>
+
+/* Platform detection and conditional includes */
+#if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
+    #include <dirent.h>
+    #include <sys/types.h>
+    #define LINUX_BUILD 1
+#else
+    #include <dir.h>
+    #define DOS_BUILD 1
+#endif
 
 /* ============================================================================
  * UI Definitions
@@ -1134,12 +1143,16 @@ void draw_about_screen() {
  * Scan directory for .sav files
  */
 int scan_files(const char *pattern, FileList *file_list) {
-    struct ffblk ff;
-    int done, count = 0;
+    int count = 0;
     
     file_list->file_count = 0;
     file_list->selected_index = 0;
     file_list->scroll_offset = 0;
+
+#ifdef DOS_BUILD
+    /* DOS implementation using findfirst/findnext */
+    struct ffblk ff;
+    int done;
     
     done = findfirst(pattern, &ff, FA_ARCH);
     
@@ -1152,6 +1165,38 @@ int scan_files(const char *pattern, FileList *file_list) {
         }
         done = findnext(&ff);
     }
+
+#elif defined(LINUX_BUILD)
+    /* Linux/Unix implementation using opendir/readdir */
+    DIR *dir;
+    struct dirent *entry;
+    char *dot;
+    const char *ext = ".sav"; /* Default to .sav files */
+    
+    dir = opendir(".");
+    if (!dir) {
+        return 0;
+    }
+    
+    while ((entry = readdir(dir)) != NULL && count < MAX_FILES) {
+        /* Skip directories */
+        if (entry->d_type == DT_DIR) {
+            continue;
+        }
+        
+        /* Check if file ends with .sav extension */
+        dot = strrchr(entry->d_name, '.');
+        if (dot && strcmp(dot, ext) == 0) {
+            strncpy(file_list->files[count].filename, entry->d_name, MAX_FILENAME_LEN - 1);
+            file_list->files[count].filename[MAX_FILENAME_LEN - 1] = '\0';
+            file_list->files[count].is_directory = 0;
+            count++;
+        }
+    }
+    
+    closedir(dir);
+
+#endif
     
     file_list->file_count = count;
     return count;
