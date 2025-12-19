@@ -116,6 +116,8 @@ compile: allegro
 			g++ -c beatchess_dos.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/dos_main.o && \
 			echo 'Compiling chess_ai_move.cpp...' && \
 			g++ -c chess_ai_move.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/chess_ai_move.o && \
+			echo 'Compiling pgn.cpp...' && \
+			g++ -c pgn.cpp -I$(BUILD_DIR)/source-install/include $(CFLAGS) -o $(OBJ_DIR)/pgn.o && \
 			echo 'Linking executable...' && \
 			g++ $(OBJ_DIR)/*.o -L$(BUILD_DIR)/source-install/lib -lalleg -lm $(CFLAGS) -s -o $(BUILD_DIR)/beatchess && \
 			echo 'Converting to COFF format...' && \
