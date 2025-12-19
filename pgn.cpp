@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "beatchess.h"
 
 bool ensure_bin_extension(char *filename, size_t bufsize) {
@@ -122,4 +123,61 @@ bool pgn_import_game(BeatChessVisualization *chess, const char *filename) {
     fclose(f);
     printf("Game loaded from: %s (%d moves)\n", bin_filename, count);
     return true;
+}
+
+/**
+ * Convert a move to algebraic notation
+ * Handles regular moves, captures, castling
+ */
+void move_to_algebraic(ChessGameState *game, ChessMove move, char *notation) {
+    if (!game || !notation) {
+        strcpy(notation, "???");
+        return;
+    }
+    
+    ChessPiece piece = game->board[move.from_row][move.from_col];
+    
+    // Get piece character based on actual enum value
+    char piece_char;
+    switch (piece.type) {
+        case PAWN:   piece_char = '\0'; break;  // pawns have no letter
+        case KNIGHT: piece_char = 'N'; break;
+        case BISHOP: piece_char = 'B'; break;
+        case ROOK:   piece_char = 'R'; break;
+        case QUEEN:  piece_char = 'Q'; break;
+        case KING:   piece_char = 'K'; break;
+        default:     piece_char = '?'; break;
+    }
+    
+    // Check for castling
+    if (piece.type == KING && abs(move.to_col - move.from_col) == 2) {
+        if (move.to_col > move.from_col) {
+            strcpy(notation, "O-O");
+        } else {
+            strcpy(notation, "O-O-O");
+        }
+        return;
+    }
+    
+    char to_file = 'a' + move.to_col;
+    char to_rank = '1' + move.to_row;
+    
+    bool is_capture = game->board[move.to_row][move.to_col].type != EMPTY;
+    
+    if (piece.type == PAWN) {
+        if (is_capture) {
+            char from_file = 'a' + move.from_col;
+            snprintf(notation, 20, "%cx%c%c", from_file, to_file, to_rank);
+        } else {
+            snprintf(notation, 20, "%c%c", to_file, to_rank);
+        }
+    } else if (piece_char != '?') {
+        if (is_capture) {
+            snprintf(notation, 20, "%cx%c%c", piece_char, to_file, to_rank);
+        } else {
+            snprintf(notation, 20, "%c%c%c", piece_char, to_file, to_rank);
+        }
+    } else {
+        snprintf(notation, 20, "%c%c", to_file, to_rank);
+    }
 }

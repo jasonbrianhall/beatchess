@@ -1,6 +1,8 @@
 #ifndef MATH_COMPAT_H
 #define MATH_COMPAT_H
 
+#ifndef __linux__
+
 #include <math.h>
 
 #ifdef __cplusplus
@@ -35,6 +37,8 @@ static inline float fmaxf(float x, float y) {
 
 #ifdef __cplusplus
 }  /* extern "C" */
+#endif
+
 #endif
 
 #endif /* MATH_COMPAT_H */
