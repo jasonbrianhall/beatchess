@@ -1,27 +1,162 @@
 /*
- * BeatChess Save/Load Module - Binary Format
- * Saves/loads move_history array directly
+ * BeatChess Save/Load Module
+ * Saves as binary move_history, loads both binary and PGN format
  */
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "beatchess.h"
+
+/* ============================================================================
+ * Helper: Convert move to algebraic notation using move_history context
+ * ============================================================================
+ */
+
+static void move_to_algebraic(ChessGameState *before_state, ChessMove move, char *notation) {
+    // Get the piece that moved from the BEFORE state
+    ChessPiece piece = before_state->board[move.from_row][move.from_col];
+    
+    char result[64] = {0};
+    int idx = 0;
+    
+    // Check for castling
+    if (piece.type == KING && move.from_col == 4) {
+        if (move.to_col == 6) {
+            strcpy(notation, "O-O");
+            return;
+        } else if (move.to_col == 2) {
+            strcpy(notation, "O-O-O");
+            return;
+        }
+    }
+    
+    // Check for capture
+    bool is_capture = before_state->board[move.to_row][move.to_col].type != EMPTY;
+    
+    // Add piece character (not for pawns, unless capture)
+    if (piece.type == PAWN) {
+        if (is_capture) {
+            result[idx++] = 'a' + move.from_col;
+        }
+    } else {
+        // Non-pawn pieces: R, B, N, Q, K
+        switch (piece.type) {
+            case ROOK:   result[idx++] = 'R'; break;
+            case KNIGHT: result[idx++] = 'N'; break;
+            case BISHOP: result[idx++] = 'B'; break;
+            case QUEEN:  result[idx++] = 'Q'; break;
+            case KING:   result[idx++] = 'K'; break;
+            default: break;
+        }
+    }
+    
+    // Add capture notation
+    if (is_capture) {
+        result[idx++] = 'x';
+    }
+    
+    // Add destination square
+    result[idx++] = 'a' + move.to_col;
+    result[idx++] = '8' - move.to_row;
+    
+    // Add promotion notation if applicable
+    if (piece.type == PAWN && (move.to_row == 0 || move.to_row == 7)) {
+        result[idx++] = '=';
+        result[idx++] = 'Q';
+    }
+    
+    result[idx] = '\0';
+    strcpy(notation, result);
+}
+
+/* ============================================================================
+ * EXPORT: Save game as PGN with move_history, also save binary backup
+ * ============================================================================
+ */
 
 bool pgn_export_game(BeatChessVisualization *chess, const char *filename,
                      const char *white_name, const char *black_name) {
-    FILE *f = fopen(filename, "wb");
+    // Save binary as .bin
+    char bin_filename[256];
+    snprintf(bin_filename, sizeof(bin_filename), "%s.bin", filename);
+    
+    FILE *binf = fopen(bin_filename, "wb");
+    if (binf) {
+        fwrite(&chess->move_history_count, sizeof(int), 1, binf);
+        fwrite(chess->move_history, sizeof(MoveHistory), chess->move_history_count, binf);
+        fclose(binf);
+    }
+    
+    // Save PGN as .pgn
+    char pgn_filename[256];
+    snprintf(pgn_filename, sizeof(pgn_filename), "%s.pgn", filename);
+    
+    FILE *f = fopen(pgn_filename, "w");
     if (!f) return false;
     
-    // Write move count
-    fwrite(&chess->move_history_count, sizeof(int), 1, f);
+    // Get current date
+    time_t now = time(NULL);
+    struct tm *timeinfo = localtime(&now);
     
-    // Write entire move_history array
-    fwrite(chess->move_history, sizeof(MoveHistory), chess->move_history_count, f);
+    // Write PGN headers
+    fprintf(f, "[Event \"BeatChess Game\"]\n");
+    fprintf(f, "[Site \"BeatChess\"]\n");
+    fprintf(f, "[Date \"%04d.%02d.%02d\"]\n",
+            timeinfo->tm_year + 1900,
+            timeinfo->tm_mon + 1,
+            timeinfo->tm_mday);
+    fprintf(f, "[Round \"1\"]\n");
+    fprintf(f, "[White \"%s\"]\n", white_name ? white_name : "Human");
+    fprintf(f, "[Black \"%s\"]\n", black_name ? black_name : "Computer");
+    fprintf(f, "[Result \"*\"]\n");
+    fprintf(f, "\n");
     
+    // Write moves in algebraic notation from move_history
+    int move_number = 1;
+    int chars_on_line = 0;
+    
+    for (int i = 0; i < chess->move_history_count; i++) {
+        MoveHistory *mh = &chess->move_history[i];
+        
+        // Convert move to algebraic notation using the BEFORE state
+        char notation[64];
+        move_to_algebraic(&mh->game_state, mh->move, notation);
+        
+        // Write move number for white's moves
+        char move_text[80];
+        if (i % 2 == 0) {
+            sprintf(move_text, "%d. %s ", move_number, notation);
+        } else {
+            sprintf(move_text, "%s ", notation);
+        }
+        
+        // Check line length
+        if (chars_on_line + strlen(move_text) > 80) {
+            fprintf(f, "\n");
+            chars_on_line = 0;
+        }
+        
+        fprintf(f, "%s", move_text);
+        chars_on_line += strlen(move_text);
+        
+        // Increment move number after black's move
+        if (i % 2 == 1) {
+            move_number++;
+        }
+    }
+    
+    fprintf(f, "*\n");
     fclose(f);
-    printf("Game saved to: %s\n", filename);
+    
+    printf("Game saved to: %s.pgn (and %s.bin)\n", filename, filename);
     return true;
 }
+
+/* ============================================================================
+ * IMPORT: Load binary game directly
+ * ============================================================================
+ */
 
 bool pgn_import_game(BeatChessVisualization *chess, const char *filename) {
     FILE *f = fopen(filename, "rb");

@@ -1268,6 +1268,7 @@ int handle_menu_click(int mx, int my) {
             chess_gui.show_menu = !chess_gui.show_menu;
             show_help_menu_dropdown = false;  /* Close Help menu if open */
             chess_gui.menu_selected = -1;
+            mark_screen_dirty();  /* Mark dirty when menu opens/closes */
             return 1;  /* Continue */
         }
         /* Help menu button (at x=50-100) */
@@ -1275,6 +1276,7 @@ int handle_menu_click(int mx, int my) {
             show_help_menu_dropdown = !show_help_menu_dropdown;
             chess_gui.show_menu = false;  /* Close File menu if open */
             chess_gui.menu_selected = -1;
+            mark_screen_dirty();  /* Mark dirty when menu opens/closes */
             return 1;  /* Continue */
         }
         /* Clicked elsewhere on menu bar - close menus if open */
@@ -1282,6 +1284,7 @@ int handle_menu_click(int mx, int my) {
             chess_gui.show_menu = false;
             show_help_menu_dropdown = false;
             chess_gui.menu_selected = -1;
+            mark_screen_dirty();  /* Mark dirty when menu closes */
         }
         return 1;  /* Continue */
     }
@@ -1303,6 +1306,7 @@ int handle_menu_click(int mx, int my) {
                     int result = execute_menu_action(0, item);
                     chess_gui.show_menu = false;
                     chess_gui.menu_selected = -1;
+                    mark_screen_dirty();  /* Mark dirty after menu action */
                     return result;  /* Return the result (0=quit, 1=continue) */
                 }
             }
@@ -1310,6 +1314,7 @@ int handle_menu_click(int mx, int my) {
             /* Clicked outside menu - close it */
             chess_gui.show_menu = false;
             chess_gui.menu_selected = -1;
+            mark_screen_dirty();  /* Mark dirty when menu closes */
             return 1;  /* Continue */
         }
     }
@@ -1329,12 +1334,14 @@ int handle_menu_click(int mx, int my) {
                 int result = execute_menu_action(1, item);
                 show_help_menu_dropdown = false;
                 chess_gui.menu_selected = -1;
+                mark_screen_dirty();  /* Mark dirty after menu action */
                 return result;
             }
         } else {
             /* Clicked outside menu - close it */
             show_help_menu_dropdown = false;
             chess_gui.menu_selected = -1;
+            mark_screen_dirty();  /* Mark dirty when menu closes */
             return 1;  /* Continue */
         }
     }
@@ -1351,11 +1358,30 @@ bool handle_button_click(int mx, int my) {
             /* Simulate keypress for the button's hotkey */
             int key = side_buttons[i].hotkey;
             switch (key) {
-                case 'N': init_chess_game(); chess_gui.ai_move_counter = 0; break;
-                case 'U': undo_move(); chess_gui.ai_move_counter = 0; break;
-                case 'A': chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai; chess_gui.ai_move_counter = 0; break;
-                case 'B': chess_gui.player_is_white = !chess_gui.player_is_white; chess_gui.ai_move_counter = 0; break;
-                case '?': chess_gui.show_help = true; break;
+                case 'N': 
+                    init_chess_game(); 
+                    chess_gui.ai_move_counter = 0; 
+                    mark_screen_needs_full_redraw();
+                    break;
+                case 'U': 
+                    undo_move(); 
+                    chess_gui.ai_move_counter = 0; 
+                    mark_screen_dirty();
+                    break;
+                case 'A': 
+                    chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai; 
+                    chess_gui.ai_move_counter = 0; 
+                    mark_screen_dirty();
+                    break;
+                case 'B': 
+                    chess_gui.player_is_white = !chess_gui.player_is_white; 
+                    chess_gui.ai_move_counter = 0; 
+                    mark_screen_dirty();
+                    break;
+                case '?': 
+                    chess_gui.show_help = true; 
+                    mark_screen_needs_full_redraw();
+                    break;
                 case 'Q': return false;  /* Signal to quit */
             }
             return true;
@@ -1365,13 +1391,12 @@ bool handle_button_click(int mx, int my) {
 }
 
 void update_menu_selection(int my) {
+    int prev_menu_selected = chess_gui.menu_selected;  /* Track previous selection */
+    
     /* Safety check input */
     if (my < 0 || my >= 480) {
         chess_gui.menu_selected = -1;
-        return;
-    }
-    
-    if (chess_gui.show_menu) {
+    } else if (chess_gui.show_menu) {
         int menu_y = MENU_BAR_HEIGHT;
         int item_h = 20;
         int max_menu_y = menu_y + NUM_FILE_MENU_ITEMS * item_h;
@@ -1410,6 +1435,11 @@ void update_menu_selection(int my) {
         }
     } else {
         chess_gui.menu_selected = -1;
+    }
+    
+    /* Mark screen dirty if menu selection changed (for hover highlighting) */
+    if (chess_gui.menu_selected != prev_menu_selected) {
+        mark_screen_dirty();
     }
 }
 
@@ -1706,12 +1736,14 @@ int main(void) {
             /* If showing help, any key returns to game */
             if (chess_gui.show_help) {
                 chess_gui.show_help = false;
+                mark_screen_needs_full_redraw();
                 continue;
             }
             
             /* If showing about, any key returns to game */
             if (chess_gui.show_about) {
                 chess_gui.show_about = false;
+                mark_screen_needs_full_redraw();
                 continue;
             }
             
