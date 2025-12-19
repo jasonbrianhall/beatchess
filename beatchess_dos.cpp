@@ -27,10 +27,43 @@
     #define DOS_BUILD 1
 #endif
 
-/* ============================================================================
- * UI Definitions
- * ============================================================================
- */
+/* Allegro keyboard support - normalize key codes across platforms */
+#ifndef KEY_UP
+    #define KEY_UP 0x48
+#endif
+#ifndef KEY_DOWN
+    #define KEY_DOWN 0x50
+#endif
+#ifndef KEY_LEFT
+    #define KEY_LEFT 0x4B
+#endif
+#ifndef KEY_RIGHT
+    #define KEY_RIGHT 0x4D
+#endif
+#ifndef KEY_ESC
+    #define KEY_ESC 0x01
+#endif
+#ifndef KEY_ENTER
+    #define KEY_ENTER 0x1C
+#endif
+#ifndef KEY_BACKSPACE
+    #define KEY_BACKSPACE 0x0E
+#endif
+#ifndef KEY_F5
+    #define KEY_F5 0x3F
+#endif
+#ifndef KEY_F6
+    #define KEY_F6 0x40
+#endif
+#ifndef KEY_F7
+    #define KEY_F7 0x41
+#endif
+#ifndef KEY_F8
+    #define KEY_F8 0x42
+#endif
+
+/* Keyboard handling - use Allegro's key[] array on Linux */
+/* On Linux, Allegro provides key[] array directly - no extern needed */
 
 #define BOARD_START_X 60
 #define BOARD_START_Y 80
@@ -961,13 +994,18 @@ void draw_board() {
             }
             
             /* Highlight selected square (overrides last move highlight) */
-            if (chess_gui.piece_selected && chess_gui.selected_row == y && chess_gui.selected_col == x) {
-                color = COLOR_YELLOW;  /* Yellow highlight for selected piece */
-            }
-            
-            /* Highlight cursor position for keyboard navigation */
-            if (!chess_gui.piece_selected && chess_gui.selected_row == y && chess_gui.selected_col == x) {
-                color = COLOR_MAGENTA;  /* Magenta highlight for cursor position */
+            /* Ensure selected_row and selected_col are in valid range (0-7) */
+            if (chess_gui.selected_row >= 0 && chess_gui.selected_row < 8 &&
+                chess_gui.selected_col >= 0 && chess_gui.selected_col < 8) {
+                
+                if (chess_gui.piece_selected && chess_gui.selected_row == y && chess_gui.selected_col == x) {
+                    color = COLOR_YELLOW;  /* Yellow highlight for selected piece */
+                }
+                
+                /* Highlight cursor position for keyboard navigation */
+                if (!chess_gui.piece_selected && chess_gui.selected_row == y && chess_gui.selected_col == x) {
+                    color = COLOR_MAGENTA;  /* Magenta highlight for cursor position */
+                }
             }
             
             rectfill(screen, screen_x, screen_y, screen_x + SQUARE_SIZE - 1, screen_y + SQUARE_SIZE - 1, color);
@@ -1954,6 +1992,11 @@ int main(void) {
     }
     
     install_keyboard();
+    
+    #ifdef LINUX_BUILD
+    /* On Linux, we may need to explicitly request keyboard input after showing window */
+    /* The game window should capture keyboard input when visible */
+    #endif
     install_mouse();
     install_timer();
     init_chess_game();
@@ -1961,7 +2004,13 @@ int main(void) {
     srand((unsigned int)time(NULL));
     
     /* Set graphics mode */
+    #ifdef LINUX_BUILD
+    /* On Linux, use windowed mode for better keyboard focus and development */
+    if (set_gfx_mode(GFX_AUTODETECT_WINDOWED, 640, 480, 0, 0) != 0) {
+    #else
+    /* On DOS, use fullscreen */
     if (set_gfx_mode(GFX_AUTODETECT, 640, 480, 0, 0) != 0) {
+    #endif
         printf("Error setting graphics mode\n");
         return 1;
     }
@@ -2184,6 +2233,7 @@ int main(void) {
         if (safe_mouse_y < 0) safe_mouse_y = 0;
         if (safe_mouse_y >= 480) safe_mouse_y = 479;
         
+        /* Only update menu selection, not board cursor (board cursor updates on click) */
         update_menu_selection(safe_mouse_y);
         
         /* Update timers - accumulate elapsed time since last move */
@@ -2238,10 +2288,55 @@ int main(void) {
         unscare_mouse();  /* Re-enable mouse drawing */
         
         /* Handle input */
+        #ifdef LINUX_BUILD
+        /* On Linux, poll keyboard */
+        poll_keyboard();
+        
+        /* Try both keypressed() AND key[] array as fallback */
+        int key_input = 0;
+        int key_code = 0;
+        int key_scancode = 0;
+        bool has_key = false;
+        
+        /* Check keypressed() first */
         if (keypressed()) {
-            int key = readkey();
-            int key_code = key & 0xFF;
-            int key_scancode = key >> 8;  /* Get extended key code for arrow keys */
+            key_input = readkey();
+            key_code = key_input & 0xFF;
+            key_scancode = key_input >> 8;
+            has_key = true;
+        } else {
+            /* Fallback: check key[] array directly */
+            if (key[KEY_UP] || key[KEY_DOWN] || key[KEY_LEFT] || key[KEY_RIGHT] ||
+                key[KEY_ESC] || key[KEY_ENTER] || key[KEY_BACKSPACE]) {
+                
+                if (key[KEY_UP]) key_scancode = KEY_UP;
+                else if (key[KEY_DOWN]) key_scancode = KEY_DOWN;
+                else if (key[KEY_LEFT]) key_scancode = KEY_LEFT;
+                else if (key[KEY_RIGHT]) key_scancode = KEY_RIGHT;
+                else if (key[KEY_ESC]) key_scancode = KEY_ESC;
+                else if (key[KEY_ENTER]) key_scancode = KEY_ENTER;
+                else if (key[KEY_BACKSPACE]) key_scancode = KEY_BACKSPACE;
+                has_key = true;
+            } else {
+                /* Check ASCII keys */
+                for (int i = 32; i < 127; i++) {
+                    if (key[i]) {
+                        key_code = i;
+                        has_key = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (has_key) {
+        #else
+        /* On DOS, use traditional keypressed()/readkey() */
+        if (keypressed()) {
+            int key_input = readkey();
+            int key_code = key_input & 0xFF;
+            int key_scancode = key_input >> 8;
+        #endif
             
             /* If showing help, any key returns to game */
             if (chess_gui.show_help) {

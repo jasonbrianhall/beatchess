@@ -9,10 +9,6 @@
 #include <time.h>
 #include "beatchess.h"
 
-/* Forward declarations */
-bool pgn_import_game(BeatChessVisualization *chess, const char *filename);
-void move_to_algebraic(ChessGameState *game, ChessMove move, char *notation);
-bool export_to_pgn(BeatChessVisualization *chess, const char *output_filename);
 
 
 /**
