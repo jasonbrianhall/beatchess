@@ -432,6 +432,34 @@ void save_position_to_history_with_move(int from_r, int from_c, int to_r, int to
     //printToSerial("DEBUG: Exiting save_position_to_history_with_move\n");
 }
 
+/**
+ * Recalculate elapsed times based on move history
+ * Used when loading games or undoing moves to sync timers with position
+ */
+void recalculate_timers_from_history() {
+    chess_gui.white_total_time = 0;
+    chess_gui.black_total_time = 0;
+    
+    /* Sum up elapsed times from each move in history */
+    for (int i = 0; i < chess_gui.move_history_count && i < MAX_MOVE_HISTORY * 2; i++) {
+        if (chess_gui.move_history[i].time_elapsed > 0) {
+            /* Determine whose move it was (alternating: white, black, white, ...) */
+            if (i % 2 == 0) {
+                /* Even index = white's move */
+                chess_gui.white_total_time += chess_gui.move_history[i].time_elapsed;
+            } else {
+                /* Odd index = black's move */
+                chess_gui.black_total_time += chess_gui.move_history[i].time_elapsed;
+            }
+        }
+    }
+    
+    /* Reset current move timer to now */
+    chess_gui.current_move_start_time = clock();
+    chess_gui.last_move_end_time = clock();
+    chess_gui.white_time_milliseconds = chess_gui.white_total_time;
+    chess_gui.black_time_milliseconds = chess_gui.black_total_time;
+}
 
 void undo_move() {
     //printToSerial("\n\nIn Undo Move\n");
@@ -547,6 +575,9 @@ void undo_move() {
     chess_gui.piece_selected_col = -1;
     chess_gui.selected_row = -1;
     chess_gui.selected_col = -1;
+    
+    /* Recalculate timers based on the restored position */
+    recalculate_timers_from_history();
     
     /* Clear AI state */
     ////printToSerial("Resetting AI state\n");
@@ -858,7 +889,7 @@ void draw_side_panel() {
     int white_mins = white_total_ms / 60000;
     int white_secs = (white_total_ms % 60000) / 1000;
     int white_ms = white_total_ms % 1000;
-    snprintf(buf, 64, "White: %d:%02d", white_mins, white_secs, white_ms);
+    snprintf(buf, 64, "White: %d:%02d.%03d", white_mins, white_secs, white_ms);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 15, COLOR_WHITE, -1);
     
     /* Black time - display as MM:SS.mmm (milliseconds with 3 decimal places) */
@@ -866,7 +897,7 @@ void draw_side_panel() {
     int black_mins = black_total_ms / 60000;
     int black_secs = (black_total_ms % 60000) / 1000;
     int black_ms = black_total_ms % 1000;
-    snprintf(buf, 64, "Black: %d:%02d", black_mins, black_secs, black_ms);
+    snprintf(buf, 64, "Black: %d:%02d.%03d", black_mins, black_secs, black_ms);
     textout_ex(screen, font, buf, BUTTON_PANEL_X, timer_y + 30, COLOR_WHITE, -1);
     
     /* AI thinking indicator */
@@ -1579,6 +1610,9 @@ void dos_load_game_dialog() {
         for (int i = 0; i < chess_vis.move_history_count && i < MAX_MOVE_HISTORY * 2; i++) {
             chess_gui.move_history[i] = chess_vis.move_history[i];
         }
+        
+        /* Initialize and recalculate timers based on loaded game */
+        recalculate_timers_from_history();
         
         textout_centre_ex(screen, font, "Game loaded successfully!", 320, 200, COLOR_GREEN, -1);
         char msg[256];
