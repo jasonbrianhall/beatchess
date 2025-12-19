@@ -80,6 +80,10 @@ BITMAP *buffers[NUM_BUFFERS];
 int current_buffer = 0;
 BITMAP *active_buffer = NULL;
 
+/* Dirty screen tracking */
+bool screen_is_dirty = true;  /* Start dirty to force initial draw */
+bool screen_needs_full_redraw = true;  /* Force full redraw flag */
+
 /* Help menu dropdown state (separate from show_help screen) */
 bool show_help_menu_dropdown = false;
 
@@ -101,11 +105,15 @@ void init_triple_buffers() {
 
 /**
  * Swap to next buffer and return it for drawing
+ * Only blits to screen if screen_is_dirty is true
  */
 BITMAP* get_next_buffer_and_swap() {
-    /* Display the previously prepared buffer */
-    vsync();  /* Wait for vertical sync */
-    blit(buffers[current_buffer], screen, 0, 0, 0, 0, 640, 480);
+    /* Only update screen if it's marked as dirty */
+    if (screen_is_dirty) {
+        vsync();  /* Wait for vertical sync */
+        blit(buffers[current_buffer], screen, 0, 0, 0, 0, 640, 480);
+        screen_is_dirty = false;  /* Mark screen as clean after update */
+    }
     
     /* Advance to next buffer for drawing */
     current_buffer = (current_buffer + 1) % NUM_BUFFERS;
@@ -124,6 +132,22 @@ void cleanup_triple_buffers() {
             buffers[i] = NULL;
         }
     }
+}
+
+/**
+ * Mark the screen as dirty so it will be redrawn next frame
+ */
+void mark_screen_dirty() {
+    screen_is_dirty = true;
+    screen_needs_full_redraw = true;
+}
+
+/**
+ * Mark the screen for a full redraw (clears buffer before drawing)
+ */
+void mark_screen_needs_full_redraw() {
+    screen_needs_full_redraw = true;
+    screen_is_dirty = true;
 }
 
 /**
@@ -1557,6 +1581,7 @@ int main(void) {
                         save_position_to_history_with_move(ai_move.from_row, ai_move.from_col, 
                                                             ai_move.to_row, ai_move.to_col);
                         chess_gui.move_count++;  /* Increment move counter after move is committed */
+                        mark_screen_dirty();  /* Mark screen dirty after AI move */
                         
                         /* Check for checkmate or stalemate */
                         if (!chess_is_in_check(&chess_gui.game, chess_gui.game.turn)) {
@@ -1640,26 +1665,34 @@ int main(void) {
         BITMAP *prev_target = screen;
         screen = active_buffer;
         
-        /* Clear active buffer */
-        clear_to_color(active_buffer, COLOR_BLACK);
-        
-        /* Draw game (no mouse cursor interference) */
-        if (chess_gui.show_help) {
-            draw_help_screen();
-        } else if (chess_gui.show_about) {
-            draw_about_screen();
-        } else {
-            draw_board();
-            draw_pieces();
-            draw_check_status();  /* Draw check/checkmate/stalemate overlay */
-            draw_side_panel();
-            draw_menu_bar();  /* Draw menu last so it appears on top */
+        /* Only redraw if screen is dirty or needs full redraw */
+        if (screen_is_dirty || screen_needs_full_redraw) {
+            /* Clear active buffer only if needed */
+            if (screen_needs_full_redraw) {
+                clear_to_color(active_buffer, COLOR_BLACK);
+                screen_needs_full_redraw = false;
+            } else {
+                clear_to_color(active_buffer, COLOR_BLACK);
+            }
+            
+            /* Draw game (no mouse cursor interference) */
+            if (chess_gui.show_help) {
+                draw_help_screen();
+            } else if (chess_gui.show_about) {
+                draw_about_screen();
+            } else {
+                draw_board();
+                draw_pieces();
+                draw_check_status();  /* Draw check/checkmate/stalemate overlay */
+                draw_side_panel();
+                draw_menu_bar();  /* Draw menu last so it appears on top */
+            }
         }
         
         /* Restore screen target */
         screen = prev_target;
         
-        /* Triple buffer: swap to next buffer with vsync */
+        /* Triple buffer: swap to next buffer with vsync (only blits if dirty) */
         scare_mouse();  /* Temporarily disable mouse drawing */
         get_next_buffer_and_swap();  /* Handles vsync and buffer rotation */
         unscare_mouse();  /* Re-enable mouse drawing */
@@ -1770,6 +1803,7 @@ int main(void) {
                 }
                 
                 if (is_movement) {
+                    mark_screen_dirty();
                     continue;  /* Skip further key processing */
                 }
             }
@@ -1884,6 +1918,7 @@ int main(void) {
                 chess_gui.piece_selected = false;
                 chess_gui.piece_selected_row = -1;
                 chess_gui.piece_selected_col = -1;
+                mark_screen_dirty();
                 continue;
             }
             
@@ -1897,22 +1932,26 @@ int main(void) {
                 case 'N':
                     init_chess_game();
                     chess_gui.ai_move_counter = 0;
+                    mark_screen_needs_full_redraw();
                     break;
                     
                 case 'u':
                 case 'U':
                     undo_move();
                     chess_gui.ai_move_counter = 0;
+                    mark_screen_dirty();
                     break;
                     
                 case 'b':
                 case 'B':
                     chess_gui.player_is_white = !chess_gui.player_is_white;
                     chess_gui.ai_move_counter = 0;
+                    mark_screen_dirty();
                     break;
                     
                 case '?':
                     chess_gui.show_help = true;
+                    mark_screen_needs_full_redraw();
                     break;
                     
                 default:
@@ -1921,21 +1960,25 @@ int main(void) {
                         case KEY_F5:
                             /* F5: Black color next */
                             dark_color_idx = (dark_color_idx + 1) % DARK_PALETTE_SIZE;
+                            mark_screen_dirty();
                             break;
                             
                         case KEY_F6:
                             /* F6: Black color previous */
                             dark_color_idx = (dark_color_idx - 1 + DARK_PALETTE_SIZE) % DARK_PALETTE_SIZE;
+                            mark_screen_dirty();
                             break;
                             
                         case KEY_F7:
                             /* F7: White color next */
                             light_color_idx = (light_color_idx + 1) % LIGHT_PALETTE_SIZE;
+                            mark_screen_dirty();
                             break;
                             
                         case KEY_F8:
                             /* F8: White color previous */
                             light_color_idx = (light_color_idx - 1 + LIGHT_PALETTE_SIZE) % LIGHT_PALETTE_SIZE;
+                            mark_screen_dirty();
                             break;
                     }
                     break;
@@ -1957,6 +2000,7 @@ int main(void) {
             /* If showing help, click returns to game */
             if (chess_gui.show_help) {
                 chess_gui.show_help = false;
+                mark_screen_needs_full_redraw();
                 prev_mouse_b = mouse_b;
                 continue;
             }
@@ -1964,6 +2008,7 @@ int main(void) {
             /* If showing about, click returns to game */
             if (chess_gui.show_about) {
                 chess_gui.show_about = false;
+                mark_screen_needs_full_redraw();
                 prev_mouse_b = mouse_b;
                 continue;
             }
@@ -2008,6 +2053,7 @@ int main(void) {
                             chess_gui.selected_row = row;
                             chess_gui.selected_col = col;
                             chess_gui.piece_selected = true;
+                            mark_screen_dirty();
                         } else if (chess_gui.piece_selected) {
                             /* Try to move piece */
                             if (chess_is_valid_move(&chess_gui.game,
@@ -2035,9 +2081,11 @@ int main(void) {
                                     chess_gui.move_count++;  /* Increment move counter after move is committed */
                                     /* Turn is switched by chess_make_move */
                                     chess_gui.ai_move_counter = 0;  /* Reset AI timer */
+                                    mark_screen_dirty();  /* Mark screen dirty after move */
                                 }
                             }
                             chess_gui.piece_selected = false;
+                            mark_screen_dirty();  /* Mark dirty when deselecting piece */
                         }
                     }
                 }
