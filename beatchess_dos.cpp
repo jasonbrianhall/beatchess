@@ -1099,7 +1099,7 @@ void dos_input_string(char *buffer, int max_len, int x, int y) {
         
         /* Redraw input line */
         clear_to_color(screen, COLOR_BLACK);
-        textout(screen, font, "Enter filename (no .pgn needed): ", 20, y, COLOR_WHITE);
+        textout(screen, font, "Enter filename:", 20, y, COLOR_WHITE);
         textout(screen, font, buffer, 20, y + 20, COLOR_YELLOW);
         textout(screen, font, "_", 20 + pos * 8, y + 20, COLOR_CYAN);
         
@@ -1124,12 +1124,7 @@ void dos_save_game_dialog() {
         /* User cancelled */
         return;
     }
-    
-    /* Add .pgn extension if not present */
-    if (strlen(filename) < 4 || strcmp(filename + strlen(filename) - 4, ".pgn") != 0) {
-        strcat(filename, ".pgn");
-    }
-    
+        
     /* Try to save game */
     BeatChessVisualization chess_vis;
     chess_vis.game = chess_gui.game;
@@ -1174,12 +1169,7 @@ void dos_load_game_dialog() {
         /* User cancelled */
         return;
     }
-    
-    /* Add .pgn extension if not present */
-    if (strlen(filename) < 4 || strcmp(filename + strlen(filename) - 4, ".pgn") != 0) {
-        strcat(filename, ".pgn");
-    }
-    
+        
     /* Show status message */
     clear_to_color(screen, COLOR_BLACK);
     
