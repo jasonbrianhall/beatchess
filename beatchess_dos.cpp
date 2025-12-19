@@ -2555,6 +2555,16 @@ int main(void) {
         
         prev_mouse_b = mouse_b;  /* Remember current state for next frame */
         
+        /* Mark screen dirty every second to ensure timer updates display continuously */
+        static clock_t last_periodic_dirty_mark = 0;
+        clock_t current_time_check = clock();
+        long elapsed_since_mark_ms = (long)((current_time_check - last_periodic_dirty_mark) * 1000.0 / CLOCKS_PER_SEC);
+        
+        if (elapsed_since_mark_ms >= 1000) {  /* Every 1000ms (1 second) */
+            mark_screen_dirty();
+            last_periodic_dirty_mark = current_time_check;
+        }
+        
         /* Small delay to prevent CPU spinning */
         rest(10);  /* 10ms delay */
     }

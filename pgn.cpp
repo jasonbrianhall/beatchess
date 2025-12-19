@@ -7,46 +7,6 @@
 #include <string.h>
 #include "beatchess.h"
 
-bool pgn_export_game(BeatChessVisualization *chess, const char *filename,
-                     const char *white_name, const char *black_name) {
-    if (!filename || !chess) {
-        fprintf(stderr, "Error: Invalid parameters\n");
-        return false;
-    }
-    
-    // Remove .bin extension if present in filename
-    char base_filename[256];
-    strncpy(base_filename, filename, sizeof(base_filename) - 1);
-    base_filename[sizeof(base_filename) - 1] = '\0';
-    
-    // Strip .bin if it's there
-    if (strlen(base_filename) > 4) {
-        if (strcmp(base_filename + strlen(base_filename) - 4, ".bin") == 0) {
-            base_filename[strlen(base_filename) - 4] = '\0';
-        }
-    }
-    
-    // Save binary
-    char bin_filename[256];
-    snprintf(bin_filename, sizeof(bin_filename), "%s.bin", base_filename);
-    
-    FILE *f = fopen(bin_filename, "wb");
-    if (!f) {
-        fprintf(stderr, "Error: Could not open %s for writing\n", bin_filename);
-        return false;
-    }
-    
-    // Write move count
-    fwrite(&chess->move_history_count, sizeof(int), 1, f);
-    
-    // Write entire move_history array
-    fwrite(chess->move_history, sizeof(MoveHistory), chess->move_history_count, f);
-    
-    fclose(f);
-    printf("Game saved to: %s\n", bin_filename);
-    return true;
-}
-
 bool ensure_bin_extension(char *filename, size_t bufsize) {
     const char *ext = ".bin";
     size_t len_f = strlen(filename);
@@ -65,6 +25,58 @@ bool ensure_bin_extension(char *filename, size_t bufsize) {
     memcpy(filename + len_f, ext, len_e + 1);
     return true;
 }
+
+bool pgn_export_game(BeatChessVisualization *chess, const char *filename,
+                     const char *white_name, const char *black_name)
+{
+    if (!filename || !chess) {
+        fprintf(stderr, "Error: Invalid parameters\n");
+        return false;
+    }
+
+    // Copy filename into a mutable buffer
+    char base_filename[256];
+    strncpy(base_filename, filename, sizeof(base_filename) - 1);
+    base_filename[sizeof(base_filename) - 1] = '\0';
+
+    // Strip .bin (case-insensitive)
+    size_t len = strlen(base_filename);
+    const char *ext = ".bin";
+    size_t ext_len = strlen(ext);
+
+    if (len >= ext_len &&
+        strcasecmp(base_filename + (len - ext_len), ext) == 0)
+    {
+        base_filename[len - ext_len] = '\0';
+    }
+
+    // Build final .bin filename
+    char bin_filename[256];
+    if (snprintf(bin_filename, sizeof(bin_filename), "%s.bin", base_filename)
+        >= sizeof(bin_filename))
+    {
+        fprintf(stderr, "Error: filename too long\n");
+        return false;
+    }
+
+    FILE *f = fopen(bin_filename, "wb");
+    if (!f) {
+        fprintf(stderr, "Error: Could not open %s for writing\n", bin_filename);
+        return false;
+    }
+
+    // Write move count
+    fwrite(&chess->move_history_count, sizeof(int), 1, f);
+
+    // Write move history
+    fwrite(chess->move_history, sizeof(MoveHistory),
+           chess->move_history_count, f);
+
+    fclose(f);
+    printf("Game saved to: %s\n", bin_filename);
+    return true;
+}
+
 
 bool pgn_import_game(BeatChessVisualization *chess, const char *filename) {
     char bin_filename[256];
