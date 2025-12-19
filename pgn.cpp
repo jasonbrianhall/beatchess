@@ -133,7 +133,7 @@ void print_board_utf8(ChessGameState *game) {
     const char *black_pieces[] = {" ", "♙", "♘", "♗", "♖", "♕", "♔"};
     
     printf("  a b c d e f g h\n");
-    for (int row = 7; row >= 0; row--) {
+    for (int row = 0; row < 8; row++) {
         printf("%d ", row + 1);
         for (int col = 0; col < 8; col++) {
             ChessPiece piece = game->board[row][col];
