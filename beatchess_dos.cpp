@@ -8,6 +8,7 @@
 #include "chess_pieces_loader.h"
 #include "chess_ai_move.h"
 #include "splashscreen.h"
+#include "pgn.h"
 #include <allegro.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -190,6 +191,9 @@ Button side_buttons[] = {
 const char *file_menu_items[] = {
     "New Game     N",
     "Undo Move    U",
+    "",  /* separator */
+    "Save Game    S",
+    "Load Game    L",
     "",  /* separator */
     "AI vs AI     A",
     "Swap Color   B",
@@ -1021,6 +1025,165 @@ void draw_about_screen() {
 }
 
 /* ============================================================================
+ * PGN Save/Load Functions (requires pgn.h and pgn.c to be included)
+ * ============================================================================
+ */
+
+/**
+ * Simple text input for DOS - get a filename from user
+ */
+void dos_input_string(char *buffer, int max_len, int x, int y) {
+    int pos = 0;
+    buffer[0] = '\0';
+    
+    while (1) {
+        /* Get keyboard input */
+        if (keypressed()) {
+            int key = readkey();
+            int key_code = key & 0xFF;
+            int key_scan = key >> 8;
+            
+            /* Enter key - accept input */
+            if (key_scan == KEY_ENTER || key_code == '\r') {
+                buffer[pos] = '\0';
+                break;
+            }
+            
+            /* Escape key - cancel */
+            if (key_scan == KEY_ESC) {
+                buffer[0] = '\0';
+                break;
+            }
+            
+            /* Backspace */
+            if (key_scan == KEY_BACKSPACE && pos > 0) {
+                pos--;
+                buffer[pos] = '\0';
+            }
+            
+            /* Regular character */
+            if (key_code >= 32 && key_code <= 126 && pos < max_len - 1) {
+                buffer[pos] = key_code;
+                pos++;
+                buffer[pos] = '\0';
+            }
+        }
+        
+        /* Redraw input line */
+        clear_to_color(screen, COLOR_BLACK);
+        textout(screen, font, "Enter filename (no .pgn needed): ", 20, y, COLOR_WHITE);
+        textout(screen, font, buffer, 20, y + 20, COLOR_YELLOW);
+        textout(screen, font, "_", 20 + pos * 8, y + 20, COLOR_CYAN);
+        
+        vsync();
+    }
+}
+
+/**
+ * Save game dialog - called from menu
+ */
+void dos_save_game_dialog() {
+    char filename[256];
+    
+    /* Clear screen and show dialog */
+    clear_to_color(screen, COLOR_BLACK);
+    textout_centre(screen, font, "SAVE GAME", 320, 50, COLOR_YELLOW);
+    
+    /* Get filename from user */
+    dos_input_string(filename, sizeof(filename), 20, 150);
+    
+    if (strlen(filename) == 0) {
+        /* User cancelled */
+        return;
+    }
+    
+    /* Add .pgn extension if not present */
+    if (strlen(filename) < 4 || strcmp(filename + strlen(filename) - 4, ".pgn") != 0) {
+        strcat(filename, ".pgn");
+    }
+    
+    /* Try to save game */
+    BeatChessVisualization chess_vis;
+    chess_vis.game = chess_gui.game;
+    chess_vis.move_history_count = chess_gui.move_history_count;
+    chess_vis.move_count = chess_gui.move_count;
+    
+    // Copy move history
+    for (int i = 0; i < chess_gui.move_history_count && i < MAX_MOVE_HISTORY * 2; i++) {
+        chess_vis.move_history[i] = chess_gui.move_history[i];
+    }
+    
+    /* Show status message */
+    clear_to_color(screen, COLOR_BLACK);
+    
+    if (pgn_export_game(&chess_vis, filename, "Human", "BeatChess AI")) {
+        textout_centre(screen, font, "Game saved successfully!", 320, 200, COLOR_GREEN);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "File: %s", filename);
+        textout_centre(screen, font, msg, 320, 220, COLOR_WHITE);
+    } else {
+        textout_centre(screen, font, "Error: Failed to save game", 320, 200, COLOR_RED);
+    }
+    
+    textout_centre(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW);
+    readkey();
+}
+
+/**
+ * Load game dialog - called from menu
+ */
+void dos_load_game_dialog() {
+    char filename[256];
+    
+    /* Clear screen and show dialog */
+    clear_to_color(screen, COLOR_BLACK);
+    textout_centre(screen, font, "LOAD GAME", 320, 50, COLOR_YELLOW);
+    
+    /* Get filename from user */
+    dos_input_string(filename, sizeof(filename), 20, 150);
+    
+    if (strlen(filename) == 0) {
+        /* User cancelled */
+        return;
+    }
+    
+    /* Add .pgn extension if not present */
+    if (strlen(filename) < 4 || strcmp(filename + strlen(filename) - 4, ".pgn") != 0) {
+        strcat(filename, ".pgn");
+    }
+    
+    /* Show status message */
+    clear_to_color(screen, COLOR_BLACK);
+    
+    BeatChessVisualization chess_vis;
+    chess_vis.game = chess_gui.game;
+    chess_vis.move_history_count = 0;
+    chess_vis.move_count = 0;
+    
+    if (pgn_import_game(&chess_vis, filename)) {
+        /* Success - copy game back to GUI */
+        chess_gui.game = chess_vis.game;
+        chess_gui.move_history_count = chess_vis.move_history_count;
+        chess_gui.move_count = chess_vis.move_count;
+        
+        /* Copy move history */
+        for (int i = 0; i < chess_vis.move_history_count && i < MAX_MOVE_HISTORY * 2; i++) {
+            chess_gui.move_history[i] = chess_vis.move_history[i];
+        }
+        
+        textout_centre(screen, font, "Game loaded successfully!", 320, 200, COLOR_GREEN);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Loaded %d moves", chess_gui.move_history_count);
+        textout_centre(screen, font, msg, 320, 220, COLOR_WHITE);
+    } else {
+        textout_centre(screen, font, "Error: Failed to load game", 320, 200, COLOR_RED);
+        textout_centre(screen, font, "Check filename and format", 320, 220, COLOR_RED);
+    }
+    textout_centre(screen, font, "Press any key to continue...", 320, 280, COLOR_YELLOW);
+    readkey();
+}
+
+/* ============================================================================
  * Menu and button handling
  * ============================================================================
  */
@@ -1038,17 +1201,25 @@ int execute_menu_action(int menu_type, int index) {
                 chess_gui.ai_move_counter = 0;
                 return 1;  /* Continue */
                 
-            case 3:  /* AI vs AI */
+            case 3:  /* Save Game */
+                dos_save_game_dialog();
+                return 1;  /* Continue */
+                
+            case 4:  /* Load Game */
+                dos_load_game_dialog();
+                return 1;  /* Continue */
+                
+            case 6:  /* AI vs AI */
                 chess_gui.ai_vs_ai = !chess_gui.ai_vs_ai;
                 chess_gui.ai_move_counter = 0;
                 return 1;  /* Continue */
                 
-            case 4:  /* Swap Color */
+            case 7:  /* Swap Color */
                 chess_gui.player_is_white = !chess_gui.player_is_white;
                 chess_gui.ai_move_counter = 0;
                 return 1;  /* Continue */
                 
-            case 6:  /* Quit */
+            case 9:  /* Quit */
                 return 0;  /* Signal quit */
         }
     } else if (menu_type == 1) {  /* Help menu */
