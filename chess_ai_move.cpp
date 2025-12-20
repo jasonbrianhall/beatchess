@@ -40,7 +40,11 @@ typedef struct {
  */
 ChessAIConfig chess_ai_get_default_config(void) {
     ChessAIConfig config;
+#ifdef __linux__
+    config.search_depth = 6;
+#else
     config.search_depth = 3;
+#endif
     config.threshold_centipawns = 25;
     config.use_randomization = true;
     return config;

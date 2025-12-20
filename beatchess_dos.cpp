@@ -231,6 +231,7 @@ void mark_screen_needs_full_redraw() {
  * Retrieve a game state from history at logical position.
  * Uses a straight buffer - no circular wrapping.
  */
+#ifndef LINUX_BUILD
 void printToSerial(const char *fmt, ...) {
     FILE *serial = fopen("COM1", "w");
     if (!serial) return;
@@ -242,6 +243,7 @@ void printToSerial(const char *fmt, ...) {
 
     fclose(serial);
 }
+#endif
 
 ChessGameState get_history_at_position(int position) {
     ChessGameState result;
@@ -367,11 +369,6 @@ void init_chess_game() {
     chess_gui.ai_move_delay = 15;
     chess_gui.ai_thinking = false;
     chess_gui.ai_computing = false;
-#ifdef LINUX_BUILD
-    chess_gui.ai_search_depth = 6;   // default depth
-#else
-    chess_gui.ai_search_depth = 3;   // default depth
-#endif
     chess_gui.ai_total_moves = 0;
     chess_gui.ai_evaluated_moves = 0;
     chess_gui.ai_best_move.from_row = -1;
@@ -792,7 +789,6 @@ ChessMove compute_ai_move() {
     /* Update GUI state with AI evaluation metadata */
     chess_gui.ai_total_moves = result.total_moves_evaluated;
     chess_gui.ai_evaluated_moves = result.total_moves_evaluated;
-    chess_gui.ai_search_depth = config.search_depth;
     
     /* Return the selected move */
     return result.move;

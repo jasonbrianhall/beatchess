@@ -7,7 +7,7 @@ CXXFLAGS = -O3 -Wall -fomit-frame-pointer -DMSDOS -fpermissive -s
 # Source files
 SRCS = beatchess_dos.cpp beatchess.cpp chess_ai_move.cpp pgn.cpp
 OBJS = $(SRCS:.cpp=.o)
-TARGET = beatchess
+TARGET = beatchess_allegro
 
 # Allegro 4 paths (same as WarpNES)
 ALLEGRO_CFLAGS = -I/usr/include
