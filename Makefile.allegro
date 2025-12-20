@@ -9,8 +9,8 @@ SRCS = beatchess_dos.cpp beatchess.cpp chess_ai_move.cpp pgn.cpp
 OBJS = $(SRCS:.cpp=.o)
 TARGET = beatchess_allegro
 
-# Allegro 4 paths (same as WarpNES)
-ALLEGRO_CFLAGS = -I/usr/include
+# Allegro 4 paths 
+ALLEGRO_CFLAGS = -I/usr/include -DMSDOS
 ALLEGRO_LIBS = -lalleg -lm
 
 all: $(TARGET)
