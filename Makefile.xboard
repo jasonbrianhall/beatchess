@@ -1,0 +1,14 @@
+# Makefile for building BeatChess with MS-DOS define
+
+CXX = g++
+CXXFLAGS = -DMSDOS
+SRC = xboard.cpp beatchess.cpp
+OUT = beatchess-xboard
+
+all: $(OUT)
+
+$(OUT): $(SRC)
+	$(CXX) $(CXXFLAGS) $(SRC) -o $(OUT)
+
+clean:
+	rm -f $(OUT)
