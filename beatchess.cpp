@@ -242,12 +242,12 @@ int chess_minimax_enhanced(ChessGameState *game, int depth, int initial_depth, i
         }
     }
     
-    move_count = chess_aggressive_filter_moves(game, moves, move_count, depth, initial_depth);
+    /*move_count = chess_aggressive_filter_moves(game, moves, move_count, depth, initial_depth);
     if (move_count == 0) {
         int eval = chess_evaluate_position(game);
         chess_store_tt(hash, depth, eval, TT_EXACT);
         return eval;
-    }
+    }*/
     
     chess_reorder_moves_with_killers(game, moves, &move_count, killers, depth);
     
