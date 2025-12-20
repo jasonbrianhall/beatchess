@@ -2,7 +2,7 @@
 # Uses the same simple approach as WarpNES
 
 CXX = g++
-CXXFLAGS = -O3 -Wall -fomit-frame-pointer -DMSDOS -fpermissive -s
+CXXFLAGS = -O3 -Wall -fomit-frame-pointer -fpermissive -s
 
 # Source files
 SRCS = beatchess_dos.cpp beatchess.cpp chess_ai_move.cpp pgn.cpp
