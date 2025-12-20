@@ -643,6 +643,23 @@ int chess_evaluate_position(ChessGameState *game) {
         }
     }
     
+    // PAWN PROMOTION BONUS - reward queens on promotion rank
+    // Queens on back rank (row 0 for white, row 7 for black) are newly promoted
+    // This gives a huge score boost to make promotion moves highest priority
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.type == QUEEN) {
+                // Check if queen just promoted (on back rank)
+                if ((p.color == WHITE && r == 0) || (p.color == BLACK && r == 7)) {
+                    // Bonus = net gain from pawn promotion (900 - 100 = 800)
+                    int promotion_bonus = 800;
+                    score += (p.color == WHITE) ? promotion_bonus : -promotion_bonus;
+                }
+            }
+        }
+    }
+    
     // DEFENSE CHECK - pieces with friendly neighbors
     // 15 centipawns per defender - meaningful but not overwhelming
     for (int r = 0; r < 8; r++) {
@@ -2472,5 +2489,3 @@ void chess_cleanup_thinking_state(ChessThinkingState *ts) {
     ts->thinking = false;
 #endif
 }
-
-
