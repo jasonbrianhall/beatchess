@@ -2,7 +2,7 @@
 
 CXX = g++
 CXXFLAGS = -DMSDOS
-SRC = xboard.cpp beatchess.cpp
+SRC = xboard.cpp beatchess.cpp chess_ai_move.cpp
 OUT = beatchess-xboard
 
 all: $(OUT)
