@@ -13,7 +13,8 @@
 #include "beatchess.h"
 #include "chess_ai_move.h"
 
-static ChessGameState game;
+typedef enum { WvA, BvA, AvA } GameMode;
+
 static int search_depth = 4;
 static FILE *debug_log = NULL;
 
@@ -39,6 +40,9 @@ ChessMove str_to_move(const char *str) {
 }
 
 int main(void) {
+    ChessGameState game;
+    int GameMode = WvA;  
+
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     
@@ -48,6 +52,7 @@ int main(void) {
     }
     
     chess_init_board(&game);
+    bool computerset=false;
     
     char line[4096];
     while (fgets(line, sizeof(line), stdin)) {
@@ -57,7 +62,7 @@ int main(void) {
         debug_print("[IN] %s\n", line);
         
         if (strcmp(line, "xboard") == 0) {
-            debug_print("[CMD] xboard mode\n");
+            debug_print("[CMD] xboard mfode\n");
         } 
         else if (strncmp(line, "protover", 8) == 0) {
             debug_print("[CMD] protover command\n");
@@ -67,9 +72,12 @@ int main(void) {
         else if (strcmp(line, "new") == 0) {
             debug_print("[CMD] new game\n");
             chess_init_board(&game);
+            computerset=false;
         }
         else if (strcmp(line, "go") == 0) {
             debug_print("[CMD] go - using chess_ai_compute_move()\n");
+            debug_print("[Turn] %s\n", (game.turn == WHITE ? "white" : "black"));
+          
             ChessAIConfig config;
             config.search_depth = search_depth;
             config.threshold_centipawns = 25;
@@ -81,14 +89,25 @@ int main(void) {
                 fflush(stdout);
                 debug_print("[OUT] %s (score=%d, evaluated=%d)\n", 
                            move_to_str(result.move), result.score, result.total_moves_evaluated);
-                //chess_make_move(&game, result.move);
+                chess_make_move(&game, result.move);
+                if (game.turn==WHITE) {
+                    game.turn=BLACK;
+                } else {
+                    game.turn=WHITE;
+                }
             }
         }
         else if (strlen(line) >= 4 && isalpha(line[0]) && isdigit(line[1]) && 
                  isalpha(line[2]) && isdigit(line[3])) {
             debug_print("[CMD] opponent move: %s\n", line);
+            debug_print("[Turn] %s\n", (game.turn == WHITE ? "white" : "black"));
             ChessMove m = str_to_move(line);
-            //chess_make_move(&game, m);
+            chess_make_move(&game, m);
+            if (game.turn==WHITE) {
+                game.turn=BLACK;
+            } else {
+                game.turn=WHITE;
+            }
         }
         else if (strncmp(line, "level", 5) == 0) {
             debug_print("[CMD] level (time control) - ignored\n");
@@ -98,6 +117,10 @@ int main(void) {
         }
         else if (strncmp(line, "otim", 4) == 0) {
             debug_print("[CMD] otim - ignored\n");
+        }
+        else if (strncmp(line, "computer", 8) == 0) {
+            debug_print("[CMD] computer - AI Mode\n");
+            computerset=true;
         }
         else if (strncmp(line, "accepted", 8) == 0) {
             debug_print("[CMD] accepted - feature acknowledged\n");
@@ -115,12 +138,20 @@ int main(void) {
             debug_print("[CMD] easy mode\n");
         }
         else if (strcmp(line, "white") == 0) {
-            debug_print("[CMD] white to move\n");
-            game.turn = WHITE;
+            debug_print("[CMD] white\n");
+            if (computerset==true) {
+                 debug_print("[CMD] AI is white\n");
+            }
         }
         else if (strcmp(line, "black") == 0) {
-            debug_print("[CMD] black to move\n");
-            game.turn = BLACK;
+            debug_print("[CMD] black\n");
+            if (computerset==true) {
+                 debug_print("[CMD] AI is black and white\n");
+                 GameMode=AvA;
+            } else {
+                 debug_print("[CMD] Human is Black, AI is White\n");
+                 GameMode=BvA;
+            }
         }
         else if (strcmp(line, "quit") == 0) {
             debug_print("[CMD] quit\n");
