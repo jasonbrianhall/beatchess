@@ -44,7 +44,7 @@ int main(void) {
     
     debug_log = fopen("beatchess.log", "w");
     if (debug_log) {
-        debug_print("=== BeatChess WINBOARD Engine (Using chess_ai_move.cpp) ===\n");
+        debug_print("=== BeatChess Engine ===\n");
     }
     
     chess_init_board(&game);
@@ -81,14 +81,14 @@ int main(void) {
                 fflush(stdout);
                 debug_print("[OUT] %s (score=%d, evaluated=%d)\n", 
                            move_to_str(result.move), result.score, result.total_moves_evaluated);
-                chess_make_move(&game, result.move);
+                //chess_make_move(&game, result.move);
             }
         }
         else if (strlen(line) >= 4 && isalpha(line[0]) && isdigit(line[1]) && 
                  isalpha(line[2]) && isdigit(line[3])) {
             debug_print("[CMD] opponent move: %s\n", line);
             ChessMove m = str_to_move(line);
-            chess_make_move(&game, m);
+            //chess_make_move(&game, m);
         }
         else if (strncmp(line, "level", 5) == 0) {
             debug_print("[CMD] level (time control) - ignored\n");

@@ -2014,7 +2014,6 @@ int main(void) {
     install_timer();
     init_chess_game();
     /* Seed random number generator with current time for variety in AI moves */
-    srand((unsigned int)time(NULL));
     
     /* Set graphics mode */
     int gfx_result = -1;
@@ -2087,6 +2086,8 @@ int main(void) {
     
     /* Game loop */
     while (running) {
+        srand((unsigned int)time(NULL));
+
         /* Check for window close button (Linux only) */
         #ifdef LINUX_BUILD
         if (window_close_requested) {
