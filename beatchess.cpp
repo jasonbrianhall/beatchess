@@ -298,23 +298,38 @@ typedef struct {
 } ScoredMove;
 
 static bool chess_should_eliminate_move(ChessGameState *game, ChessMove move, int depth, int initial_depth) {
-    static int piece_values[] = {0, 100, 320, 330, 500, 900, 20000};
+    // Validate move bounds
+    if (!chess_is_in_bounds(move.from_row, move.from_col) ||
+        !chess_is_in_bounds(move.to_row, move.to_col)) {
+        return true;  // Out of bounds
+    }
     
+    // Get the piece being moved
     ChessPiece attacker = game->board[move.from_row][move.from_col];
     ChessPiece target = game->board[move.to_row][move.to_col];
     
-    // Only eliminate king moves into check - this is required for legality
-    if (attacker.type == KING) {
-        ChessGameState temp = *game;
-        chess_make_move(&temp, move);
-        if (chess_is_in_check(&temp, game->turn)) {
-            return true;  // Illegal move
-        }
+    // Can't move empty squares or opponent pieces
+    if (attacker.type == EMPTY || attacker.color != game->turn) {
+        return true;  // Illegal move
     }
     
-    // THAT'S IT - Everything else is too expensive
-    // Let the search and material evaluation do the work
-    return false;
+    // Can't capture own pieces
+    if (target.color == game->turn) {
+        return true;  // Illegal move
+    }
+    
+    // Check if move leaves king in check (illegal for any piece)
+    ChessGameState temp = *game;
+    chess_make_move(&temp, move);
+    
+    // After moving, check if the side that just moved is in check.
+    // The turn has already switched in temp, so we check the moving side's original color.
+    ChessColor moving_color = game->turn;
+    if (chess_is_in_check(&temp, moving_color)) {
+        return true;  // Moving piece leaves king in check - ILLEGAL
+    }
+    
+    return false;  // Move is legal
 }
 
 bool chess_is_in_bounds(int r, int c) {
