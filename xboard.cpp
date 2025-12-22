@@ -53,7 +53,12 @@ int main(void) {
     
     chess_init_board(&game);
     bool computerset=false;
-    
+
+    ChessAIConfig config;
+    config.search_depth = search_depth;
+    config.threshold_centipawns = 25;
+    config.use_randomization = true;
+
     char line[4096];
     while (fgets(line, sizeof(line), stdin)) {
         size_t len = strlen(line);
@@ -66,9 +71,21 @@ int main(void) {
         } 
         else if (strncmp(line, "protover", 8) == 0) {
             debug_print("[CMD] protover command\n");
+
+            // Tell xboard who we are
+            printf("feature myname=\"BeatChess\"\n");
+
+            // Tell xboard we expect moves as: `usermove e2e4`
+            printf("feature usermove=1\n");
+
+            // (Optional but good) We can handle SIGINT/SIGTERM cleanly
+            printf("feature sigint=0 sigterm=0\n");
+
+            // We're done telling xboard our capabilities
             printf("feature done=1\n");
             fflush(stdout);
         }
+
         else if (strcmp(line, "new") == 0) {
             debug_print("[CMD] new game\n");
             chess_init_board(&game);
@@ -78,38 +95,18 @@ int main(void) {
             debug_print("[CMD] go - using chess_ai_compute_move()\n");
             debug_print("[Turn] %s\n", (game.turn == WHITE ? "white" : "black"));
           
-            ChessAIConfig config;
-            config.search_depth = search_depth;
-            config.threshold_centipawns = 25;
-            config.use_randomization = false;
             
-            ChessAIMoveResult result = chess_ai_compute_move(&game, config);
-            if (result.move.from_row >= 0) {
-                printf("%s\n", move_to_str(result.move));
-                fflush(stdout);
-                debug_print("[OUT] %s (score=%d, evaluated=%d)\n", 
-                           move_to_str(result.move), result.score, result.total_moves_evaluated);
-                chess_make_move(&game, result.move);
-                if (game.turn==WHITE) {
-                    game.turn=BLACK;
-                } else {
-                    game.turn=WHITE;
-                }
-            }
         }
-        else if (strlen(line) >= 4 && isalpha(line[0]) && isdigit(line[1]) && 
-                 isalpha(line[2]) && isdigit(line[3])) {
-            debug_print("[CMD] opponent move: %s\n", line);
+        else if (strncmp(line, "usermove ", 9) == 0) {
+            const char *mv = line + 9;   // skip "usermove "
+            debug_print("[CMD] opponent move: %s\n", mv);
             debug_print("[Turn] %s\n", (game.turn == WHITE ? "white" : "black"));
-            ChessMove m = str_to_move(line);
+        
+            ChessMove m = str_to_move(mv);
             chess_make_move(&game, m);
-            if (game.turn==WHITE) {
-                game.turn=BLACK;
-            } else {
-                game.turn=WHITE;
-            }
-        }
-        else if (strncmp(line, "level", 5) == 0) {
+
+            debug_print("[Turn] %s\n", (game.turn == WHITE ? "white" : "black"));
+        } else if (strncmp(line, "level", 5) == 0) {
             debug_print("[CMD] level (time control) - ignored\n");
         }
         else if (strncmp(line, "time", 4) == 0) {
@@ -160,6 +157,26 @@ int main(void) {
         else if (strlen(line) > 0) {
             debug_print("[CMD] unknown: %s\n", line);
         }
+        if (GameMode==WvA && game.turn == BLACK) {
+            debug_print("[AI Move WvA]\n");
+            ChessAIMoveResult result = chess_ai_compute_move(&game, config);
+            if (result.move.from_row >= 0) {
+                 chess_make_move(&game, result.move);
+
+                debug_print("[After] move %s\n", move_to_str(result.move));
+
+                printf("move %s\n", move_to_str(result.move));
+                fflush(stdout);
+                debug_print("[Turn] %s\n", (game.turn == WHITE ? "white" : "black"));
+            }
+            else {
+                debug_print("[After] Invalid move %s\n", move_to_str(result.move));
+            }
+        } else {
+            debug_print("Game mode %i turn %s\n", GameMode, (game.turn == WHITE ? "white" : "black"));
+        }
+        debug_print("Loop is finished waiting for input\n");
+
     }
     
     if (debug_log) {
