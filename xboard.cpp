@@ -157,7 +157,7 @@ int main(void) {
         else if (strlen(line) > 0) {
             debug_print("[CMD] unknown: %s\n", line);
         }
-        if (GameMode==WvA && game.turn == BLACK) {
+        if ((GameMode==WvA && game.turn == BLACK) || (GameMode==BvA && game.turn == WHITE) || (GameMode==AvA)) {
             debug_print("[AI Move WvA]\n");
             ChessAIMoveResult result = chess_ai_compute_move(&game, config);
             if (result.move.from_row >= 0) {
