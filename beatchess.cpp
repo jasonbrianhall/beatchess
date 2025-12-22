@@ -658,6 +658,29 @@ int chess_evaluate_position(ChessGameState *game) {
         }
     }
     
+    // KING SAFETY - Discourage unnecessary king moves
+    // Apply penalty to kings that have moved away from starting positions
+    // Starting positions: White king at e1 (row 7, col 4), Black king at e8 (row 0, col 4)
+    for (int r = 0; r < BOARD_SIZE; r++) {
+        for (int c = 0; c < BOARD_SIZE; c++) {
+            ChessPiece p = game->board[r][c];
+            if (p.type == KING) {
+                int distance_penalty = 0;
+                if (p.color == WHITE) {
+                    // White king starting position: row 7, col 4
+                    int dist_from_start = abs(r - 7) + abs(c - 4);  // Manhattan distance
+                    distance_penalty = dist_from_start * 30;  // 30 points per square away from start
+                    score -= distance_penalty;
+                } else {
+                    // Black king starting position: row 0, col 4
+                    int dist_from_start = abs(r - 0) + abs(c - 4);  // Manhattan distance
+                    distance_penalty = dist_from_start * 30;  // 30 points per square away from start
+                    score += distance_penalty;
+                }
+            }
+        }
+    }
+    
     // PAWN PROMOTION BONUS - reward queens on promotion rank
     // Queens on back rank (row 0 for white, row 7 for black) are newly promoted
     // This gives a huge score boost to make promotion moves highest priority
