@@ -1,0 +1,67 @@
+# BeatChess SDL2 Makefile
+
+CXX      = g++
+CXXFLAGS = -Wall -O2 -std=c++11 -DMSDOS \
+           $(shell pkg-config --cflags sdl2 SDL2_mixer SDL2_ttf) \
+           -I.
+LDFLAGS  = $(shell pkg-config --libs sdl2 SDL2_mixer SDL2_ttf) \
+           -lm -lpthread
+
+TARGET   = beatchess_sdl
+
+# SDL2 source files
+SOURCES  = beatchess_sdl.cpp beatchess.cpp chess_ai_move.cpp pgn.cpp
+OBJECTS  = $(SOURCES:.cpp=.o)
+
+.PHONY: all clean debug rebuild
+
+all: $(TARGET)
+	@echo "✅ Build successful: $(TARGET)"
+
+$(TARGET): $(OBJECTS)
+	@echo "Linking $(TARGET)..."
+	$(CXX) -o $@ $^ $(LDFLAGS)
+
+%.o: %.cpp
+	@echo "Compiling $<..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+debug: CXXFLAGS += -g -O0 -DCHESS_AI_DEBUG
+debug: TARGET = beatchess_sdl_debug
+debug: clean all
+	@echo "✅ Debug build: beatchess_sdl_debug"
+
+clean:
+	@echo "Cleaning..."
+	rm -f $(OBJECTS) $(TARGET) beatchess_sdl_debug
+	@echo "✅ Clean complete"
+
+rebuild: clean all
+
+# Windows cross-compile from Linux with mingw-w64
+# Install: sudo apt install mingw-w64
+# Place SDL2/SDL2_mixer/SDL2_ttf mingw dev archives in ./win_deps/
+WIN_CXX     = x86_64-w64-mingw32-g++
+WIN_TARGET  = beatchess_sdl.exe
+WIN_CFLAGS  = -Wall -O2 -std=c++11 -DMSDOS \
+              -I./win_deps/SDL2/include \
+              -I./win_deps/SDL2_mixer/include \
+              -I./win_deps/SDL2_ttf/include -I.
+WIN_LDFLAGS = -L./win_deps/SDL2/lib -L./win_deps/SDL2_mixer/lib \
+              -L./win_deps/SDL2_ttf/lib \
+              -lSDL2 -lSDL2_mixer -lSDL2_ttf -lm -mwindows
+WIN_OBJECTS = $(SOURCES:.cpp=.win.o)
+
+.PHONY: windows clean_windows
+
+windows: $(WIN_TARGET)
+	@echo "✅ Windows build: $(WIN_TARGET)"
+
+$(WIN_TARGET): $(WIN_OBJECTS)
+	$(WIN_CXX) -o $@ $^ $(WIN_LDFLAGS)
+
+%.win.o: %.cpp
+	$(WIN_CXX) $(WIN_CFLAGS) -c $< -o $@
+
+clean_windows:
+	rm -f $(WIN_OBJECTS) $(WIN_TARGET)

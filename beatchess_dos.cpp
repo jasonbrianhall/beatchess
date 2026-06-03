@@ -8,8 +8,7 @@
 #include "chess_pieces_loader.h"
 #include "chess_ai_move.h"
 
-/* stb_image: single-header JPEG decoder (public domain).
- * Must be defined in exactly one .cpp before the first include. */
+/* stb_image: single-header JPEG decoder. Must be defined in exactly one .cpp. */
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_BMP
@@ -129,6 +128,273 @@ int light_color_palette[] = {
 #define LIGHT_PALETTE_SIZE (sizeof(light_color_palette) / sizeof(light_color_palette[0]))
 
 
+
+
+/* ============================================================================
+ * MIDI SOUND SYSTEM
+ * All MIDI data is generated programmatically — no external files needed.
+ *
+ * Background: stately orchestral theme in D minor (Dm-Am-Bb-A7),
+ * using oboe melody, string harmony, cello bass, and timpani.
+ *
+ * Event stings:
+ *   SOUND_MOVE      - soft two-note string descent
+ *   SOUND_CAPTURE   - sharp brass dissonance
+ *   SOUND_CHECK     - urgent three-note trumpet fanfare
+ *   SOUND_CHECKMATE - full orchestral V-I cadence with timpani
+ *   SOUND_STALEMATE - unresolved tritone fade
+ *   SOUND_NEWGAME   - bright ascending D major fanfare
+ *
+ * GM channel assignments:
+ *   ch 0 = oboe melody (GM 68)
+ *   ch 1 = string harmony (GM 48)
+ *   ch 2 = cello bass (GM 42)
+ *   ch 3 = trumpet (GM 56)
+ *   ch 9 = percussion (GM standard)
+ * ============================================================================ */
+
+static int midi_write_vlq(unsigned char *buf, int pos, long value) {
+    unsigned char tmp[4];
+    int len = 0;
+    tmp[len++] = (unsigned char)(value & 0x7F);
+    value >>= 7;
+    while (value > 0) { tmp[len++] = (unsigned char)((value & 0x7F) | 0x80); value >>= 7; }
+    for (int i = len - 1; i >= 0; i--) buf[pos++] = tmp[i];
+    return pos;
+}
+static int midi_evt(unsigned char *buf, int pos, long delta,
+                    unsigned char status, unsigned char d1, unsigned char d2) {
+    pos = midi_write_vlq(buf, pos, delta);
+    buf[pos++] = status;
+    buf[pos++] = d1;
+    if ((status & 0xF0) != 0xC0 && (status & 0xF0) != 0xD0) buf[pos++] = d2;
+    return pos;
+}
+static int midi_pc(unsigned char *buf, int pos, long delta, int ch, int prog) {
+    pos = midi_write_vlq(buf, pos, delta);
+    buf[pos++] = (unsigned char)(0xC0 | (ch & 0x0F));
+    buf[pos++] = (unsigned char)(prog & 0x7F);
+    return pos;
+}
+static int midi_on(unsigned char *buf, int pos, long delta, int ch, int note, int vel) {
+    return midi_evt(buf, pos, delta, (unsigned char)(0x90|(ch&0x0F)), (unsigned char)note, (unsigned char)vel);
+}
+static int midi_off(unsigned char *buf, int pos, long delta, int ch, int note) {
+    return midi_evt(buf, pos, delta, (unsigned char)(0x80|(ch&0x0F)), (unsigned char)note, 0);
+}
+static int midi_eot(unsigned char *buf, int pos) {
+    buf[pos++]=0x00; buf[pos++]=0xFF; buf[pos++]=0x2F; buf[pos++]=0x00;
+    return pos;
+}
+static void midi_set_track(MIDI *m, int idx, unsigned char *data, int len) {
+    m->track[idx].data = (unsigned char *)malloc(len);
+    if (m->track[idx].data) { memcpy(m->track[idx].data, data, len); m->track[idx].len = len; }
+}
+static void midi_free_custom(MIDI *m) {
+    if (!m) return;
+    for (int i = 0; i < MIDI_TRACKS; i++) {
+        if (m->track[i].data) { free(m->track[i].data); m->track[i].data=NULL; m->track[i].len=0; }
+    }
+    free(m);
+}
+
+/* ---- Background theme: "The Quiet Board" (Dm-Am-Bb-A7, 72 BPM) ---- */
+static MIDI *create_background_theme(void) {
+    MIDI *m = (MIDI *)calloc(1, sizeof(MIDI));
+    if (!m) return NULL;
+    m->divisions = 480;
+    /* Tempo track: 72 BPM = 833333 us */
+    { unsigned char t[16]; int p=0;
+      t[p++]=0x00; t[p++]=0xFF; t[p++]=0x51; t[p++]=0x03;
+      t[p++]=0x0C; t[p++]=0xB3; t[p++]=0x55;
+      p=midi_eot(t,p); midi_set_track(m,0,t,p); }
+    /* Track 1: Oboe melody */
+    { unsigned char t[512]; int p=0;
+      p=midi_pc(t,p,0,0,68);
+      p=midi_on(t,p,0,0,74,80); p=midi_off(t,p,480,0,74);
+      p=midi_on(t,p,0,0,72,75); p=midi_off(t,p,480,0,72);
+      p=midi_on(t,p,0,0,69,75); p=midi_off(t,p,480,0,69);
+      p=midi_on(t,p,0,0,65,70); p=midi_off(t,p,480,0,65);
+      p=midi_on(t,p,0,0,64,75); p=midi_off(t,p,480,0,64);
+      p=midi_on(t,p,0,0,69,80); p=midi_off(t,p,480,0,69);
+      p=midi_on(t,p,0,0,72,78); p=midi_off(t,p,480,0,72);
+      p=midi_on(t,p,0,0,69,72); p=midi_off(t,p,480,0,69);
+      p=midi_on(t,p,0,0,65,75); p=midi_off(t,p,480,0,65);
+      p=midi_on(t,p,0,0,70,80); p=midi_off(t,p,480,0,70);
+      p=midi_on(t,p,0,0,74,78); p=midi_off(t,p,480,0,74);
+      p=midi_on(t,p,0,0,70,72); p=midi_off(t,p,480,0,70);
+      p=midi_on(t,p,0,0,69,78); p=midi_off(t,p,480,0,69);
+      p=midi_on(t,p,0,0,73,82); p=midi_off(t,p,480,0,73);
+      p=midi_on(t,p,0,0,76,85); p=midi_off(t,p,480,0,76);
+      p=midi_on(t,p,0,0,69,70); p=midi_off(t,p,480,0,69);
+      p=midi_eot(t,p); midi_set_track(m,1,t,p); }
+    /* Track 2: Strings (whole-note chords) */
+    { unsigned char t[256]; int p=0;
+      p=midi_pc(t,p,0,1,48);
+      p=midi_on(t,p,0,1,62,58); p=midi_on(t,p,0,1,65,55); p=midi_on(t,p,0,1,69,52);
+      p=midi_off(t,p,1920,1,62); p=midi_off(t,p,0,1,65); p=midi_off(t,p,0,1,69);
+      p=midi_on(t,p,0,1,57,55); p=midi_on(t,p,0,1,60,52); p=midi_on(t,p,0,1,64,50);
+      p=midi_off(t,p,1920,1,57); p=midi_off(t,p,0,1,60); p=midi_off(t,p,0,1,64);
+      p=midi_on(t,p,0,1,58,55); p=midi_on(t,p,0,1,62,52); p=midi_on(t,p,0,1,65,50);
+      p=midi_off(t,p,1920,1,58); p=midi_off(t,p,0,1,62); p=midi_off(t,p,0,1,65);
+      p=midi_on(t,p,0,1,57,58); p=midi_on(t,p,0,1,61,55); p=midi_on(t,p,0,1,64,52); p=midi_on(t,p,0,1,67,50);
+      p=midi_off(t,p,1920,1,57); p=midi_off(t,p,0,1,61); p=midi_off(t,p,0,1,64); p=midi_off(t,p,0,1,67);
+      p=midi_eot(t,p); midi_set_track(m,2,t,p); }
+    /* Track 3: Cello bass (half notes) */
+    { unsigned char t[128]; int p=0;
+      p=midi_pc(t,p,0,2,42);
+      int bass[]={38,38,45,45,46,46,45,45};
+      for(int i=0;i<8;i++){p=midi_on(t,p,0,2,bass[i],70);p=midi_off(t,p,960,2,bass[i]);}
+      p=midi_eot(t,p); midi_set_track(m,3,t,p); }
+    /* Track 4: Timpani (beats 1 and 3) */
+    { unsigned char t[128]; int p=0;
+      for(int bar=0;bar<4;bar++){
+        p=midi_on(t,p,0,9,41,72); p=midi_off(t,p,120,9,41);
+        p=midi_on(t,p,840,9,41,55); p=midi_off(t,p,120,9,41);
+        if(bar<3){p=midi_off(t,p,840,9,41);}
+      }
+      p=midi_eot(t,p); midi_set_track(m,4,t,p); }
+    return m;
+}
+
+static MIDI *sting_alloc(void) {
+    MIDI *m = (MIDI *)calloc(1, sizeof(MIDI));
+    if (!m) return NULL;
+    m->divisions = 480;
+    unsigned char t[16]; int p=0;
+    t[p++]=0x00; t[p++]=0xFF; t[p++]=0x51; t[p++]=0x03;
+    t[p++]=0x07; t[p++]=0xA1; t[p++]=0x20;
+    p=midi_eot(t,p); midi_set_track(m,0,t,p);
+    return m;
+}
+static MIDI *create_sting_move(void) {
+    MIDI *m=sting_alloc(); if(!m)return NULL;
+    unsigned char t[64]; int p=0;
+    p=midi_pc(t,p,0,1,48);
+    p=midi_on(t,p,0,1,74,55); p=midi_off(t,p,160,1,74);
+    p=midi_on(t,p,80,1,69,50); p=midi_off(t,p,160,1,69);
+    p=midi_eot(t,p); midi_set_track(m,1,t,p); return m;
+}
+static MIDI *create_sting_capture(void) {
+    MIDI *m=sting_alloc(); if(!m)return NULL;
+    unsigned char t[64]; int p=0;
+    p=midi_pc(t,p,0,3,56);
+    p=midi_on(t,p,0,3,69,100); p=midi_on(t,p,0,3,70,95);
+    p=midi_off(t,p,240,3,69); p=midi_off(t,p,0,3,70);
+    p=midi_eot(t,p); midi_set_track(m,1,t,p); return m;
+}
+static MIDI *create_sting_check(void) {
+    MIDI *m=sting_alloc(); if(!m)return NULL;
+    unsigned char t[128]; int p=0;
+    p=midi_pc(t,p,0,3,56);
+    p=midi_on(t,p,0,3,69,95); p=midi_off(t,p,200,3,69);
+    p=midi_on(t,p,40,3,74,100); p=midi_off(t,p,200,3,74);
+    p=midi_on(t,p,40,3,81,110); p=midi_off(t,p,300,3,81);
+    p=midi_eot(t,p); midi_set_track(m,1,t,p); return m;
+}
+static MIDI *create_sting_checkmate(void) {
+    MIDI *m=sting_alloc(); if(!m)return NULL;
+    { unsigned char t[128]; int p=0;
+      p=midi_pc(t,p,0,3,56);
+      p=midi_on(t,p,0,3,69,105); p=midi_on(t,p,0,3,73,100); p=midi_on(t,p,0,3,76,95);
+      p=midi_off(t,p,480,3,69); p=midi_off(t,p,0,3,73); p=midi_off(t,p,0,3,76);
+      p=midi_on(t,p,0,3,62,110); p=midi_on(t,p,0,3,65,105); p=midi_on(t,p,0,3,69,100);
+      p=midi_off(t,p,960,3,62); p=midi_off(t,p,0,3,65); p=midi_off(t,p,0,3,69);
+      p=midi_eot(t,p); midi_set_track(m,1,t,p); }
+    { unsigned char t[64]; int p=0;
+      p=midi_pc(t,p,0,1,48);
+      p=midi_on(t,p,480,1,50,90); p=midi_on(t,p,0,1,62,85); p=midi_on(t,p,0,1,65,80);
+      p=midi_off(t,p,960,1,50); p=midi_off(t,p,0,1,62); p=midi_off(t,p,0,1,65);
+      p=midi_eot(t,p); midi_set_track(m,2,t,p); }
+    { unsigned char t[32]; int p=0;
+      p=midi_on(t,p,0,9,41,120); p=midi_off(t,p,240,9,41);
+      p=midi_on(t,p,240,9,41,90); p=midi_off(t,p,240,9,41);
+      p=midi_eot(t,p); midi_set_track(m,3,t,p); }
+    return m;
+}
+static MIDI *create_sting_stalemate(void) {
+    MIDI *m=sting_alloc(); if(!m)return NULL;
+    unsigned char t[64]; int p=0;
+    p=midi_pc(t,p,0,1,48);
+    p=midi_on(t,p,0,1,62,70); p=midi_on(t,p,0,1,68,65);
+    p=midi_off(t,p,1440,1,62); p=midi_off(t,p,0,1,68);
+    p=midi_eot(t,p); midi_set_track(m,1,t,p); return m;
+}
+static MIDI *create_sting_newgame(void) {
+    MIDI *m=sting_alloc(); if(!m)return NULL;
+    { unsigned char t[128]; int p=0;
+      p=midi_pc(t,p,0,3,56);
+      int notes[]={62,66,69,74}; int lens[]={240,240,240,480};
+      for(int i=0;i<4;i++){p=midi_on(t,p,0,3,notes[i],95+i*3);p=midi_off(t,p,lens[i],3,notes[i]);}
+      p=midi_eot(t,p); midi_set_track(m,1,t,p); }
+    { unsigned char t[64]; int p=0;
+      p=midi_pc(t,p,0,1,48);
+      p=midi_on(t,p,720,1,62,80); p=midi_on(t,p,0,1,66,75); p=midi_on(t,p,0,1,69,72);
+      p=midi_off(t,p,480,1,62); p=midi_off(t,p,0,1,66); p=midi_off(t,p,0,1,69);
+      p=midi_eot(t,p); midi_set_track(m,2,t,p); }
+    { unsigned char t[64]; int p=0;
+      p=midi_on(t,p,0,9,38,80); p=midi_off(t,p,120,9,38);
+      p=midi_on(t,p,60,9,38,90); p=midi_off(t,p,120,9,38);
+      p=midi_on(t,p,60,9,38,100); p=midi_off(t,p,120,9,38);
+      p=midi_eot(t,p); midi_set_track(m,3,t,p); }
+    return m;
+}
+
+typedef enum {
+    SOUND_MOVE=0, SOUND_CAPTURE, SOUND_CHECK,
+    SOUND_CHECKMATE, SOUND_STALEMATE, SOUND_NEWGAME, SOUND_COUNT
+} SoundEvent;
+
+static MIDI *g_background = NULL;
+static MIDI *g_stings[SOUND_COUNT];
+static bool  g_sound_ok      = false;
+static bool  g_music_on      = true;
+static bool  g_sting_playing = false;
+
+static void sound_init(void) {
+    for (int i = 0; i < SOUND_COUNT; i++) g_stings[i] = NULL;
+    if (install_sound(DIGI_NONE, MIDI_AUTODETECT, NULL) != 0) {
+        if (install_sound(DIGI_NONE, MIDI_NONE, NULL) != 0) {
+            printf("Warning: MIDI unavailable, running without sound\n");
+            g_sound_ok = false; return;
+        }
+    }
+    g_sound_ok = true;
+    g_background              = create_background_theme();
+    g_stings[SOUND_MOVE]      = create_sting_move();
+    g_stings[SOUND_CAPTURE]   = create_sting_capture();
+    g_stings[SOUND_CHECK]     = create_sting_check();
+    g_stings[SOUND_CHECKMATE] = create_sting_checkmate();
+    g_stings[SOUND_STALEMATE] = create_sting_stalemate();
+    g_stings[SOUND_NEWGAME]   = create_sting_newgame();
+}
+static void sound_play_event(SoundEvent ev) {
+    if (!g_sound_ok || !g_music_on) return;
+    if (ev < 0 || ev >= SOUND_COUNT || !g_stings[ev]) return;
+    stop_midi();
+    g_sting_playing = true;
+    play_midi(g_stings[ev], 0);
+}
+static void sound_update(void) {
+    if (!g_sound_ok || !g_music_on) return;
+    if (g_sting_playing && midi_pos == 0) {
+        g_sting_playing = false;
+        if (g_background) play_midi(g_background, 1);
+    }
+}
+static void sound_start_background(void) {
+    if (!g_sound_ok || !g_music_on) return;
+    if (g_background) play_midi(g_background, 1);
+}
+static void sound_toggle_music(void) {
+    g_music_on = !g_music_on;
+    if (g_music_on) sound_start_background(); else stop_midi();
+}
+static void sound_shutdown(void) {
+    stop_midi();
+    midi_free_custom(g_background); g_background = NULL;
+    for (int i = 0; i < SOUND_COUNT; i++) { midi_free_custom(g_stings[i]); g_stings[i]=NULL; }
+}
 
 ChessGUI chess_gui;
 
@@ -431,6 +697,7 @@ void init_chess_game() {
 
     /* Save initial position */
     save_position_to_history();
+    sound_play_event(SOUND_NEWGAME);
 }
 
 
@@ -1166,6 +1433,7 @@ void draw_help_screen() {
     draw_text(100, y, COLOR_WHITE, "A - Toggle AI Mode (Player vs AI / AI vs AI)"); y += 15;
     draw_text(100, y, COLOR_WHITE, "B - Swap Player Color (White/Black)"); y += 15;
     draw_text(100, y, COLOR_WHITE, "? - Show This Help"); y += 15;
+    draw_text(100, y, COLOR_WHITE, "M - Toggle Music On/Off"); y += 15;
     draw_text(100, y, COLOR_WHITE, "Q or ESC - Quit Game"); y += 25;
     
     draw_text(100, y, COLOR_CYAN, "MOUSE CONTROLS:"); y += 20;
@@ -2047,6 +2315,7 @@ int main(void) {
     
     install_mouse();
     install_timer();
+    sound_init();
     init_chess_game();
     /* Seed random number generator with current time for variety in AI moves */
     
@@ -2115,6 +2384,7 @@ int main(void) {
     /* Display splash screen */
     printf("Displaying splash screen...\n");
     show_splash_screen(backbuffer);
+    sound_start_background();
     
     bool running = true;
     int prev_mouse_b = 0;  /* Track previous mouse button state */
@@ -2122,6 +2392,7 @@ int main(void) {
     /* Game loop */
     while (running) {
         srand((unsigned int)time(NULL));
+        sound_update();
 
         /* Check for window close button (Linux only) */
         #ifdef LINUX_BUILD
@@ -2138,6 +2409,7 @@ int main(void) {
             /* Transition from not-in-check to in-check */
             chess_gui.is_in_check = true;
             chess_gui.check_display_timer = 1.0;  /* Display "CHECK" for 1 second */
+            if (!chess_gui.is_checkmate) sound_play_event(SOUND_CHECK);
         } else if (!in_check) {
             chess_gui.is_in_check = false;
             chess_gui.check_display_timer = 0;  /* Hide the display */
@@ -2215,10 +2487,12 @@ int main(void) {
                         chess_gui.last_move_to_col = ai_move.to_col;
                         chess_gui.has_last_move = true;
                         
+                        bool ai_was_capture = (chess_gui.game.board[ai_move.to_row][ai_move.to_col].type != EMPTY);
                         chess_make_move(&chess_gui.game, ai_move);
                         save_position_to_history_with_move(ai_move.from_row, ai_move.from_col, 
                                                             ai_move.to_row, ai_move.to_col);
                         chess_gui.move_count++;  /* Increment move counter after move is committed */
+                        sound_play_event(ai_was_capture ? SOUND_CAPTURE : SOUND_MOVE);
                         
                         /* Update total time for the player who just moved */
                         if (chess_gui.game.turn == WHITE) {
@@ -2257,6 +2531,7 @@ int main(void) {
                             if (!has_legal_move) {
                                 /* Stalemate */
                                 chess_gui.is_stalemate = true;
+                                sound_play_event(SOUND_STALEMATE);
                             }
                         } else {
                             /* Current player is in check - check if they have any legal moves */
@@ -2277,6 +2552,7 @@ int main(void) {
                             if (!has_legal_move) {
                                 /* Checkmate */
                                 chess_gui.is_checkmate = true;
+                                sound_play_event(SOUND_CHECKMATE);
                             }
                         }
                     }
@@ -2659,6 +2935,11 @@ int main(void) {
                     chess_gui.show_help = true;
                     mark_screen_needs_full_redraw();
                     break;
+
+                case 'm':
+                case 'M':
+                    sound_toggle_music();
+                    break;
                     
                 default:
                     /* Check for function keys for board colors */
@@ -2782,11 +3063,13 @@ int main(void) {
                                     chess_gui.last_move_to_col = col;
                                     chess_gui.has_last_move = true;
                                     
+                                    bool player_was_capture = (chess_gui.game.board[row][col].type != EMPTY);
                                     chess_make_move(&chess_gui.game, move);
                                     save_position_to_history_with_move(chess_gui.selected_row, 
                                                                         chess_gui.selected_col,
                                                                         row, col);
                                     chess_gui.move_count++;  /* Increment move counter after move is committed */
+                                    sound_play_event(player_was_capture ? SOUND_CAPTURE : SOUND_MOVE);
                                     
                                     /* Update total time for the player who just moved (white) */
                                     clock_t current_time = clock();
@@ -2827,6 +3110,7 @@ int main(void) {
     destroy_chess_pieces();  /* Free sprite bitmaps */
     cleanup_triple_buffers();
     cleanup_chess_game();
+    sound_shutdown();
     allegro_exit();
     
     return 0;

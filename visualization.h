@@ -39,6 +39,7 @@ void chess_init_thinking_state(ChessThinkingState *ts);
 void chess_start_thinking(ChessThinkingState *ts, ChessGameState *game);
 ChessMove chess_get_best_move_now(ChessThinkingState *ts);
 void chess_stop_thinking(ChessThinkingState *ts);
+void chess_cleanup_thinking_state(ChessThinkingState *ts);
 void* chess_think_continuously(void* arg);
 
 #ifndef MSDOS
