@@ -1210,7 +1210,6 @@ static void update_ai(App *app, float dt) {
 
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
-    srand((unsigned)time(NULL));
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -1260,6 +1259,7 @@ int main(int argc, char *argv[]) {
     /* Chess engine */
     chess_init_zobrist();
     chess_clear_transposition_table();
+    srand((unsigned)time(NULL));  /* seed AFTER zobrist (which uses srand(12345)) */
     chess_init_thinking_state(&app->thinking);
 
     /* Default mode: Player vs AI, player is White */
