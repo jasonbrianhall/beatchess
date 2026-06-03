@@ -7,6 +7,15 @@
 #include "chess_pieces.h"
 #include "chess_pieces_loader.h"
 #include "chess_ai_move.h"
+
+/* stb_image: single-header JPEG decoder (public domain).
+ * Must be defined in exactly one .cpp before the first include. */
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_BMP
+#define STBI_NO_STDIO
+#include "stb_image.h"
+
 #include "splashscreen.h"
 #include "pgn.h"
 #include <allegro.h>
@@ -649,39 +658,66 @@ void undo_move() {
  */
 
 
-/* Display splash screen and wait for keypress or timeout */
+/* Display splash screen and wait for keypress or timeout.
+ * Supports JPEG (SOI marker 0xFF 0xD8) via stb_image, and BMP
+ * (8-bit indexed or 24-bit RGB) via manual decode. Format is
+ * auto-detected from the embedded splashscreen_jpg byte array. */
 void show_splash_screen(BITMAP *backbuffer) {
-    /* Load the splash screen - need to handle 8-bit indexed BMPs differently */
-    const unsigned char *data = splashscreen_bmp;
-    unsigned int len = splashscreen_bmp_len;
+    const unsigned char *data = splashscreen_jpg;
+    unsigned int len = splashscreen_jpg_len;
     BITMAP *splash = NULL;
-    
-    /* Verify BMP signature */
-    if (len >= 54 && data[0] == 'B' && data[1] == 'M') {
+
+    /* ------------------------------------------------------------------ */
+    /* JPEG path: SOI marker is 0xFF 0xD8                                  */
+    /* ------------------------------------------------------------------ */
+    if (len >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
+        int width, height, channels;
+        unsigned char *pixels = stbi_load_from_memory(
+            data, (int)len, &width, &height, &channels, 3); /* force RGB */
+
+        if (pixels && width > 0 && height > 0
+                && width <= 2048 && height <= 2048) {
+            splash = create_bitmap(width, height);
+            if (splash) {
+                for (int row = 0; row < height; row++) {
+                    const unsigned char *row_data = pixels + row * width * 3;
+                    for (int col = 0; col < width; col++) {
+                        int r = row_data[col * 3 + 0];
+                        int g = row_data[col * 3 + 1];
+                        int b = row_data[col * 3 + 2];
+                        putpixel(splash, col, row, makecol(r, g, b));
+                    }
+                }
+            }
+        }
+        if (pixels) stbi_image_free(pixels);
+
+    /* ------------------------------------------------------------------ */
+    /* BMP path: signature 'B', 'M'                                        */
+    /* ------------------------------------------------------------------ */
+    } else if (len >= 54 && data[0] == 'B' && data[1] == 'M') {
         int data_offset = data[10] | (data[11] << 8) | (data[12] << 16) | (data[13] << 24);
-        int width = data[18] | (data[19] << 8) | (data[20] << 16) | (data[21] << 24);
+        int width  = data[18] | (data[19] << 8) | (data[20] << 16) | (data[21] << 24);
         int height = data[22] | (data[23] << 8) | (data[24] << 16) | (data[25] << 24);
-        int bpp = data[28] | (data[29] << 8);
-        
+        int bpp    = data[28] | (data[29] << 8);
+
         if (height < 0) height = -height;
-        
+
         if (width > 0 && height > 0 && width <= 2048 && height <= 2048) {
             splash = create_bitmap(width, height);
-            
             if (splash) {
                 if (bpp == 8) {
                     /* 8-bit indexed color BMP */
-                    const unsigned char *palette = data + 54;
+                    const unsigned char *palette    = data + 54;
                     const unsigned char *pixel_data = data + data_offset;
                     int bytes_per_row = ((width + 3) / 4) * 4;
-                    
                     for (int row = 0; row < height; row++) {
                         const unsigned char *row_data = pixel_data + (height - 1 - row) * bytes_per_row;
                         for (int col = 0; col < width; col++) {
-                            int palette_index = row_data[col];
-                            int b = palette[palette_index * 4 + 0];
-                            int g = palette[palette_index * 4 + 1];
-                            int r = palette[palette_index * 4 + 2];
+                            int idx = row_data[col];
+                            int b = palette[idx * 4 + 0];
+                            int g = palette[idx * 4 + 1];
+                            int r = palette[idx * 4 + 2];
                             putpixel(splash, col, row, makecol(r, g, b));
                         }
                     }
@@ -689,7 +725,6 @@ void show_splash_screen(BITMAP *backbuffer) {
                     /* 24-bit RGB BMP */
                     const unsigned char *pixel_data = data + data_offset;
                     int bytes_per_row = ((width * 3 + 3) / 4) * 4;
-                    
                     for (int row = 0; row < height; row++) {
                         const unsigned char *row_data = pixel_data + (height - 1 - row) * bytes_per_row;
                         for (int col = 0; col < width; col++) {
@@ -703,7 +738,7 @@ void show_splash_screen(BITMAP *backbuffer) {
             }
         }
     }
-    
+
     if (splash) {
         /* Clear screen to black */
         clear_to_color(backbuffer, COLOR_BLACK);
