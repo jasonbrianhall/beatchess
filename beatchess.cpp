@@ -575,16 +575,56 @@ bool chess_is_in_check(ChessGameState *game, ChessColor color) {
     ChessColor opponent = (color == WHITE) ? BLACK : WHITE;
     
     // Check each opponent piece to see if it can attack the king
+    // Use direct piece movement logic instead of chess_is_valid_move to avoid circular calls
     for (int r = 0; r < BOARD_SIZE; r++) {
         for (int c = 0; c < BOARD_SIZE; c++) {
             ChessPiece piece = game->board[r][c];
             if (piece.color != opponent) continue;
             
-            // Temporarily set turn to opponent to check if move is valid
-            ChessColor saved_turn = game->turn;
-            game->turn = opponent;
-            bool can_attack = chess_is_valid_move(game, r, c, king_r, king_c);
-            game->turn = saved_turn;
+            int dr = king_r - r;
+            int dc = king_c - c;
+            
+            // Check if piece can attack the king based on piece type
+            bool can_attack = false;
+            
+            switch(piece.type) {
+                case PAWN: {
+                    int direction = (piece.color == WHITE) ? -1 : 1;
+                    if (dr == direction && abs(dc) == 1) can_attack = true;
+                    break;
+                }
+                case KNIGHT: {
+                    if ((abs(dr) == 2 && abs(dc) == 1) || (abs(dr) == 1 && abs(dc) == 2)) {
+                        can_attack = true;
+                    }
+                    break;
+                }
+                case BISHOP: {
+                    if (abs(dr) == abs(dc) && abs(dr) > 0) {
+                        can_attack = chess_is_path_clear(game, r, c, king_r, king_c);
+                    }
+                    break;
+                }
+                case ROOK: {
+                    if ((dr == 0 || dc == 0) && (dr != 0 || dc != 0)) {
+                        can_attack = chess_is_path_clear(game, r, c, king_r, king_c);
+                    }
+                    break;
+                }
+                case QUEEN: {
+                    if (((dr == 0 || dc == 0) || (abs(dr) == abs(dc))) && (dr != 0 || dc != 0)) {
+                        can_attack = chess_is_path_clear(game, r, c, king_r, king_c);
+                    }
+                    break;
+                }
+                case KING: {
+                    if (abs(dr) <= 1 && abs(dc) <= 1 && (dr != 0 || dc != 0)) {
+                        can_attack = true;
+                    }
+                    break;
+                }
+                default: break;
+            }
             
             if (can_attack) {
                 return true;
@@ -955,11 +995,96 @@ int chess_evaluate_position(ChessGameState *game) {
         }
     }
     
+
+    // HANGING PIECE PENALTY
+    // A piece is "hanging" if it is attacked by the opponent and either:
+    //   (a) not defended at all, or
+    //   (b) defended but the attacker is lower value (winning trade for opponent)
+    // Penalty = 60% of the piece value for fully hanging, 25% for losing trade.
+    // Uses chess_get_all_moves for accurate attack/defense detection.
+    {
+        int piece_values_local[] = {0, 100, 320, 330, 500, 900, 20000};
+
+        // Build attack maps: attacked_by_white[r][c] = lowest-value white attacker value (0 = none)
+        //                    attacked_by_black[r][c] = lowest-value black attacker value (0 = none)
+        int attacked_by_white[8][8] = {};
+        int attacked_by_black[8][8] = {};
+        int defended_by_white[8][8] = {};  /* sum of white defender values */
+        int defended_by_black[8][8] = {};
+
+        // Temporarily collect all moves for each color
+        ChessMove wmoves[256], bmoves[256];
+        int wn = chess_get_all_moves(game, WHITE, wmoves);
+        int bn = chess_get_all_moves(game, BLACK, bmoves);
+
+        for (int i = 0; i < wn; i++) {
+            int tr = wmoves[i].to_row, tc = wmoves[i].to_col;
+            int attacker_val = piece_values_local[game->board[wmoves[i].from_row][wmoves[i].from_col].type];
+            // Attack: white move landing on a black piece
+            if (game->board[tr][tc].color == BLACK) {
+                if (attacked_by_white[tr][tc] == 0 || attacker_val < attacked_by_white[tr][tc])
+                    attacked_by_white[tr][tc] = attacker_val;
+            }
+            // Defense: white move landing on a white piece square (x-ray defense approximation)
+            if (game->board[tr][tc].color == WHITE) {
+                defended_by_white[tr][tc] += attacker_val;
+            }
+        }
+        for (int i = 0; i < bn; i++) {
+            int tr = bmoves[i].to_row, tc = bmoves[i].to_col;
+            int attacker_val = piece_values_local[game->board[bmoves[i].from_row][bmoves[i].from_col].type];
+            if (game->board[tr][tc].color == WHITE) {
+                if (attacked_by_black[tr][tc] == 0 || attacker_val < attacked_by_black[tr][tc])
+                    attacked_by_black[tr][tc] = attacker_val;
+            }
+            if (game->board[tr][tc].color == BLACK) {
+                defended_by_black[tr][tc] += attacker_val;
+            }
+        }
+
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 8; c++) {
+                ChessPiece p = game->board[r][c];
+                if (p.type == EMPTY || p.type == KING) continue;
+
+                int val = piece_values_local[p.type];
+
+                if (p.color == WHITE) {
+                    int lowest_attacker = attacked_by_black[r][c];
+                    if (lowest_attacker == 0) continue;  /* not attacked */
+                    int defense = defended_by_white[r][c];
+                    if (defense == 0) {
+                        /* Fully hanging — penalise 60% of piece value */
+                        score -= (val * 60) / 100;
+                    } else if (lowest_attacker < val) {
+                        /* Losing trade: attacker worth less than us */
+                        int loss = val - lowest_attacker;
+                        score -= (loss * 25) / 100;
+                    }
+                } else {
+                    int lowest_attacker = attacked_by_white[r][c];
+                    if (lowest_attacker == 0) continue;
+                    int defense = defended_by_black[r][c];
+                    if (defense == 0) {
+                        score += (val * 60) / 100;
+                    } else if (lowest_attacker < val) {
+                        int loss = val - lowest_attacker;
+                        score += (loss * 25) / 100;
+                    }
+                }
+            }
+        }
+    }
+
     return score;
 }
 
 int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves) {
     int count = 0;
+    int illegal_count = 0;
+    
+    // Check if we're currently in check
+    bool in_check = chess_is_in_check(game, color);
     
     for (int fr = 0; fr < BOARD_SIZE; fr++) {
         for (int fc = 0; fc < BOARD_SIZE; fc++) {
@@ -971,7 +1096,12 @@ int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves
                             ChessMove m = {fr, fc, tr, tc, 0};
                             chess_make_move(&temp, m);
                             
-                            if (!chess_is_in_check(&temp, color)) {
+                            // Check if move leaves our king in check
+                            if (chess_is_in_check(&temp, color)) {
+                                illegal_count++;
+                                // If in check before, and this move doesn't resolve it, skip
+                                // If not in check before, and this move puts us in check, skip
+                            } else {
                                 moves[count++] = m;
                             }
                         }
@@ -979,6 +1109,10 @@ int chess_get_all_moves(ChessGameState *game, ChessColor color, ChessMove *moves
                 }
             }
         }
+    }
+    
+    if (in_check && count == 0) {
+        //fprintf(stderr, "WARNING: No legal moves found while in check! (Checkmate or Stalemate)\n");
     }
     
     return count;
@@ -1708,6 +1842,13 @@ void init_beat_chess_system(Visualizer *vis) {
     chess->pvsa_button_glow = 0;
     chess->pvsa_button_was_pressed = false;
     chess->player_vs_ai = false;  // Start with AI vs AI
+    chess->choosing_color = false;
+
+    // Color-selection overlay buttons (positions set at draw time)
+    chess->choose_white_button_hovered = false;
+    chess->choose_white_button_was_pressed = false;
+    chess->choose_black_button_hovered = false;
+    chess->choose_black_button_was_pressed = false;
     
     // Undo button
     chess->undo_button_hovered = false;
@@ -1886,40 +2027,120 @@ void update_beat_chess(void *vis_ptr, double dt) {
     
     // Handle the click if it happened
     if (pvsa_clicked) {
-        // Toggle between Player vs AI and AI vs AI
-        chess->player_vs_ai = !chess->player_vs_ai;
-        
-        // Reset game when toggling
-        chess_init_board(&chess->game);
-        chess->status = CHESS_PLAYING;
-        chess->beats_since_game_over = 0;
-        chess->waiting_for_restart = false;
-        chess->move_count = 0;
-        chess->eval_bar_position = 0;
-        chess->eval_bar_target = 0;
-        chess->time_thinking = 0;
-        chess->last_move_glow = 0;
-        chess->animation_progress = 0;
-        chess->is_animating = false;
-        chess->last_from_row = -1;
-        
         if (chess->player_vs_ai) {
-            snprintf(chess->status_text, sizeof(chess->status_text), "Player vs AI - White (player) to move");
-            chess->status_flash_color[0] = 0.2;
-            chess->status_flash_color[1] = 0.8;
-            chess->status_flash_color[2] = 1.0;
-        } else {
+            // Already in Player vs AI — switch back to AI vs AI
+            chess->player_vs_ai = false;
+            chess->choosing_color = false;
+
+            chess_init_board(&chess->game);
+            chess->status = CHESS_PLAYING;
+            chess->beats_since_game_over = 0;
+            chess->waiting_for_restart = false;
+            chess->move_count = 0;
+            chess->eval_bar_position = 0;
+            chess->eval_bar_target = 0;
+            chess->time_thinking = 0;
+            chess->last_move_glow = 0;
+            chess->animation_progress = 0;
+            chess->is_animating = false;
+            chess->last_from_row = -1;
+
             snprintf(chess->status_text, sizeof(chess->status_text), "AI vs AI - Game started!");
             chess->status_flash_color[0] = 1.0;
             chess->status_flash_color[1] = 0.65;
             chess->status_flash_color[2] = 0.0;
+            chess->status_flash_timer = 2.0;
+            chess->pvsa_button_glow = 1.0;
+
+            chess_start_thinking(&chess->thinking_state, &chess->game);
+        } else {
+            // Enter color-selection overlay
+            chess->choosing_color = true;
+            chess->pvsa_button_glow = 1.0;
         }
-        chess->status_flash_timer = 2.0;
-        chess->pvsa_button_glow = 1.0;
-        
-        // Start thinking for new game
-        chess_start_thinking(&chess->thinking_state, &chess->game);
     }
+
+    // ===== COLOR SELECTION OVERLAY =====
+    if (chess->choosing_color) {
+        // White button
+        bool is_over_white = (vis->mouse_x >= chess->choose_white_button_x &&
+                              vis->mouse_x <= chess->choose_white_button_x + chess->choose_white_button_width &&
+                              vis->mouse_y >= chess->choose_white_button_y &&
+                              vis->mouse_y <= chess->choose_white_button_y + chess->choose_white_button_height);
+        chess->choose_white_button_hovered = is_over_white;
+        bool white_was = chess->choose_white_button_was_pressed;
+        bool white_now = vis->mouse_left_pressed;
+        bool white_clicked = (white_was && !white_now && is_over_white);
+        chess->choose_white_button_was_pressed = white_now;
+
+        // Black button
+        bool is_over_black = (vis->mouse_x >= chess->choose_black_button_x &&
+                              vis->mouse_x <= chess->choose_black_button_x + chess->choose_black_button_width &&
+                              vis->mouse_y >= chess->choose_black_button_y &&
+                              vis->mouse_y <= chess->choose_black_button_y + chess->choose_black_button_height);
+        chess->choose_black_button_hovered = is_over_black;
+        bool black_was = chess->choose_black_button_was_pressed;
+        bool black_now = vis->mouse_left_pressed;
+        bool black_clicked = (black_was && !black_now && is_over_black);
+        chess->choose_black_button_was_pressed = black_now;
+
+        auto start_pvsa = [&](bool play_as_black) {
+            chess->choosing_color = false;
+            chess->player_vs_ai = true;
+            chess->board_flipped = play_as_black;
+
+            chess_init_board(&chess->game);
+            chess->status = CHESS_PLAYING;
+            chess->beats_since_game_over = 0;
+            chess->waiting_for_restart = false;
+            chess->move_count = 0;
+            chess->eval_bar_position = 0;
+            chess->eval_bar_target = 0;
+            chess->time_thinking = 0;
+            chess->last_move_glow = 0;
+            chess->animation_progress = 0;
+            chess->is_animating = false;
+            chess->last_from_row = -1;
+            chess->last_from_col = -1;
+            chess->last_to_row = -1;
+            chess->last_to_col = -1;
+            chess->white_total_time = 0.0;
+            chess->black_total_time = 0.0;
+            chess->current_move_start_time = 0.0;
+            chess->last_move_end_time = 0.0;
+            chess->time_since_last_move = 0.0;
+            chess->move_history_count = 0;
+            chess->has_selected_piece = false;
+            chess->selected_piece_row = -1;
+            chess->selected_piece_col = -1;
+            chess->is_in_check = false;
+            chess->check_display_timer = 0;
+            chess->is_checkmate = false;
+            chess->is_stalemate = false;
+
+            if (play_as_black) {
+                snprintf(chess->status_text, sizeof(chess->status_text), "Playing as BLACK - AI plays WHITE");
+                chess->status_flash_color[0] = 0.9;
+                chess->status_flash_color[1] = 0.9;
+                chess->status_flash_color[2] = 0.2;
+            } else {
+                snprintf(chess->status_text, sizeof(chess->status_text), "Playing as WHITE - AI plays BLACK");
+                chess->status_flash_color[0] = 0.2;
+                chess->status_flash_color[1] = 0.8;
+                chess->status_flash_color[2] = 1.0;
+            }
+            chess->status_flash_timer = 2.0;
+
+            chess_start_thinking(&chess->thinking_state, &chess->game);
+        };
+
+        if (white_clicked) start_pvsa(false);
+        if (black_clicked) start_pvsa(true);
+
+        // While choosing color, skip the rest of the update
+        return;
+    }
+    // ===================================
     // ===============================================
     
     // ===== CHECK UNDO BUTTON INTERACTION =====
@@ -2178,21 +2399,21 @@ void update_beat_chess(void *vis_ptr, double dt) {
                                 chess->last_move_end_time = 0.0;
 
                                 if (chess->status == CHESS_CHECKMATE_WHITE) {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! Black wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! Black wins! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 0.85;
                                     chess->status_flash_color[1] = 0.65;
                                     chess->status_flash_color[2] = 0.13;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else if (chess->status == CHESS_CHECKMATE_BLACK) {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! White wins!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Checkmate! White wins! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 1.0;
                                     chess->status_flash_color[1] = 1.0;
                                     chess->status_flash_color[2] = 1.0;
                                     chess->is_checkmate = true;
                                     chess->check_display_timer = 0;  // Hide CHECK
                                 } else {
-                                    snprintf(chess->status_text, sizeof(chess->status_text), "Stalemate!");
+                                    snprintf(chess->status_text, sizeof(chess->status_text), "Stalemate! Click or wait 2 beats...");
                                     chess->status_flash_color[0] = 0.7;
                                     chess->status_flash_color[1] = 0.7;
                                     chess->status_flash_color[2] = 0.7;
@@ -2266,28 +2487,49 @@ void update_beat_chess(void *vis_ptr, double dt) {
     // Handle game over
     if (chess->status != CHESS_PLAYING) {
         if (chess->waiting_for_restart) {
+            // Allow left-click anywhere to restart
+            bool click_restart = false;
+            {
+                bool is_pressed = vis->mouse_left_pressed;
+                bool was_pressed = chess->selected_piece_was_pressed;
+                bool just_clicked = (was_pressed && !is_pressed);
+                chess->selected_piece_was_pressed = is_pressed;
+                if (just_clicked) click_restart = true;
+            }
+
+            bool beat_restart = false;
             if (beat_chess_detect_beat(vis)) {
                 chess->beats_since_game_over++;
                 chess->time_since_last_move = 0;
-                
-                if (chess->beats_since_game_over >= 2) {
-                    // Restart game
-                    chess_init_board(&chess->game);
-                    chess->status = CHESS_PLAYING;
-                    chess->beats_since_game_over = 0;
-                    chess->waiting_for_restart = false;
-                    chess->move_count = 0;
-                    chess->eval_bar_position = 0;
-                    chess->eval_bar_target = 0;
-                    chess->time_thinking = 0;
-                    snprintf(chess->status_text, sizeof(chess->status_text), "New game! White to move");
-                    chess->status_flash_color[0] = 0.0;
-                    chess->status_flash_color[1] = 1.0;
-                    chess->status_flash_color[2] = 1.0;
-                    chess->status_flash_timer = 1.0;
-                    
-                    chess_start_thinking(&chess->thinking_state, &chess->game);
-                }
+                if (chess->beats_since_game_over >= 2) beat_restart = true;
+            }
+
+            if (click_restart || beat_restart) {
+                // Restart game
+                chess_stop_thinking(&chess->thinking_state);
+                chess_init_board(&chess->game);
+                chess->status = CHESS_PLAYING;
+                chess->beats_since_game_over = 0;
+                chess->waiting_for_restart = false;
+                chess->move_count = 0;
+                chess->eval_bar_position = 0;
+                chess->eval_bar_target = 0;
+                chess->time_thinking = 0;
+                chess->last_move_glow = 0;
+                chess->animation_progress = 0;
+                chess->is_animating = false;
+                chess->last_from_row = -1;
+                chess->is_in_check = false;
+                chess->check_display_timer = 0;
+                chess->is_checkmate = false;
+                chess->is_stalemate = false;
+                chess->has_selected_piece = false;
+                snprintf(chess->status_text, sizeof(chess->status_text), "New game! White to move");
+                chess->status_flash_color[0] = 0.0;
+                chess->status_flash_color[1] = 1.0;
+                chess->status_flash_color[2] = 1.0;
+                chess->status_flash_timer = 1.0;
+                chess_start_thinking(&chess->thinking_state, &chess->game);
             }
         }
         return;
@@ -2491,7 +2733,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
         // Check move limit
         if (chess->move_count >= MAX_MOVES_BEFORE_DRAW) {
             snprintf(chess->status_text, sizeof(chess->status_text),
-                    "Draw by move limit! New game in 2 beats...");
+                    "Draw by move limit! Click or wait 2 beats for new game...");
             chess->status = CHESS_STALEMATE;
             chess->is_stalemate = true;
             chess->check_display_timer = 0;  // Hide CHECK
@@ -2509,7 +2751,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
             
             if (chess->status == CHESS_CHECKMATE_WHITE) {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Checkmate! White wins! New game in 2 beats...");
+                        "Checkmate! White wins! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 1.0;
                 chess->status_flash_color[1] = 1.0;
                 chess->status_flash_color[2] = 1.0;
@@ -2518,7 +2760,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->status_flash_timer = 2.0;
             } else if (chess->status == CHESS_CHECKMATE_BLACK) {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Checkmate! Black wins! New game in 2 beats...");
+                        "Checkmate! Black wins! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 0.85;
                 chess->status_flash_color[1] = 0.65;
                 chess->status_flash_color[2] = 0.13;
@@ -2527,7 +2769,7 @@ void update_beat_chess(void *vis_ptr, double dt) {
                 chess->status_flash_timer = 2.0;
             } else {
                 snprintf(chess->status_text, sizeof(chess->status_text),
-                        "Stalemate! New game in 2 beats...");
+                        "Stalemate! Click or wait 2 beats...");
                 chess->status_flash_color[0] = 0.7;
                 chess->status_flash_color[1] = 0.7;
                 chess->status_flash_color[2] = 0.7;

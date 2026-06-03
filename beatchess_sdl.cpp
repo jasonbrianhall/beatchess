@@ -43,20 +43,54 @@
  * Constants
  * ============================================================================ */
 
-#define WINDOW_W        900
-#define WINDOW_H        640
-#define LOGICAL_W       900
-#define LOGICAL_H       640
+/* ---- Dynamic layout scaled from the window size ----
+ * Base design is 900x640. All layout values scale from g_scale.
+ * g_scale is set at startup and on every window resize. */
+static float g_scale = 1.0f;
 
-#define BOARD_MARGIN_X  60
-#define BOARD_MARGIN_Y  40
-#define SQUARE_SIZE     68
+/* Logical resolution tracks the actual window size */
+static int LOGICAL_W = 900;
+static int LOGICAL_H = 640;
 
-#define PANEL_X         (BOARD_MARGIN_X + 8 * SQUARE_SIZE + 12)
-#define PANEL_W         (LOGICAL_W - PANEL_X - 8)
+/* Layout constants — recalculated by layout_update() on resize */
+static int BOARD_MARGIN_X = 60;
+static int BOARD_MARGIN_Y = 40;
+static int SQUARE_SIZE    = 68;
+static int PANEL_X        = 60 + 8*68 + 12;
+static int PANEL_W        = 900 - (60 + 8*68 + 12) - 8;
+static int MENU_H         = 22;
 
-#define MENU_H          22
-#define ANIM_SPEED      3.0f   /* completes in ~0.33s */
+/* Font point sizes at current scale */
+static int FONT_SM  = 13;
+static int FONT_MED = 17;
+static int FONT_LG  = 22;
+
+#define ANIM_SPEED      3.0f
+
+static void layout_update(int win_w, int win_h) {
+    LOGICAL_W = win_w;
+    LOGICAL_H = win_h;
+    g_scale   = win_w / 900.0f;
+
+    BOARD_MARGIN_X = (int)(60  * g_scale);
+    BOARD_MARGIN_Y = (int)(40  * g_scale);
+    MENU_H         = (int)(22  * g_scale);
+
+    /* Square size: fit 8 squares in the shorter of (height-margins, width*0.6) */
+    float max_sq_h = (win_h - BOARD_MARGIN_Y - MENU_H - (int)(20*g_scale)) / 8.0f;
+    float max_sq_w = (win_w * 0.62f) / 8.0f;
+    SQUARE_SIZE    = (int)fminf(max_sq_h, max_sq_w);
+
+    PANEL_X = BOARD_MARGIN_X + 8 * SQUARE_SIZE + (int)(12 * g_scale);
+    PANEL_W = LOGICAL_W - PANEL_X - (int)(8 * g_scale);
+
+    FONT_SM  = (int)(13 * g_scale);
+    FONT_MED = (int)(17 * g_scale);
+    FONT_LG  = (int)(22 * g_scale);
+    if (FONT_SM  < 9)  FONT_SM  = 9;
+    if (FONT_MED < 12) FONT_MED = 12;
+    if (FONT_LG  < 16) FONT_LG  = 16;
+}
 
 /* ============================================================================
  * Primitive drawing helpers
@@ -150,10 +184,21 @@ static bool fonts_init(void) {
     size_t font_len = 0;
     g_font_buf = b64_decode(DEJAVU_REGULAR_FONT_B64, DEJAVU_REGULAR_FONT_B64_SIZE, &font_len);
     if (!g_font_buf) return false;
-    g_font_sm  = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 1, 13);
-    g_font_med = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 1, 17);
-    g_font_lg  = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 1, 22);
+    g_font_sm  = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 0, FONT_SM);
+    g_font_med = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 0, FONT_MED);
+    g_font_lg  = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 0, FONT_LG);
     return g_font_sm && g_font_med && g_font_lg;
+}
+
+static void fonts_rebuild(void) {
+    if (!g_font_buf) return;
+    if (g_font_sm)  { TTF_CloseFont(g_font_sm);  g_font_sm  = NULL; }
+    if (g_font_med) { TTF_CloseFont(g_font_med); g_font_med = NULL; }
+    if (g_font_lg)  { TTF_CloseFont(g_font_lg);  g_font_lg  = NULL; }
+    size_t font_len = (size_t)(DEJAVU_REGULAR_FONT_B64_SIZE * 3 / 4);
+    g_font_sm  = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 0, FONT_SM);
+    g_font_med = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 0, FONT_MED);
+    g_font_lg  = TTF_OpenFontRW(SDL_RWFromMem(g_font_buf, (int)font_len), 0, FONT_LG);
 }
 
 static void fonts_shutdown(void) {
@@ -297,6 +342,8 @@ typedef struct {
 
     /* Legal move hints */
     bool  legal_dests[8][8];     /* squares reachable from selected piece */
+    bool  danger_squares[8][8];  /* legal_dest squares attacked by opponent */
+    bool  check_squares[8][8];   /* legal_dest squares that put opponent king in check */
 
     /* Game mode */
     bool  player_vs_ai;
@@ -349,6 +396,7 @@ typedef struct {
     /* Menus */
     bool file_menu_open;
     bool help_menu_open;
+    bool confirm_new_game;  /* showing "are you sure?" dialog */
 
     bool running;
 } App;
@@ -408,19 +456,43 @@ static void set_cursor(SDL_Cursor *c) {
  * Legal move hint calculation
  * ============================================================================ */
 
-static void calc_legal_dests(App *app) {
-    memset(app->legal_dests, 0, sizeof(app->legal_dests));
-    if (!app->piece_selected) return;
-    int fr = app->selected_row, fc = app->selected_col;
+/* Returns true if (row,col) can be captured by `attacker` in the given state */
+static bool square_is_attacked(ChessGameState *game, int row, int col, ChessColor attacker) {
     ChessMove moves[256];
-    int n = chess_get_all_moves(&app->game, app->game.turn, moves);
+    int n = chess_get_all_moves(game, attacker, moves);
+    for (int i = 0; i < n; i++) {
+        if (moves[i].to_row == row && moves[i].to_col == col)
+            return true;
+    }
+    return false;
+}
+
+static void calc_legal_dests(App *app) {
+    memset(app->legal_dests,    0, sizeof(app->legal_dests));
+    memset(app->danger_squares, 0, sizeof(app->danger_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
+    if (!app->piece_selected) return;
+
+    int fr = app->selected_row, fc = app->selected_col;
+    ChessColor mover    = app->game.turn;
+    ChessColor opponent = (mover == WHITE) ? BLACK : WHITE;
+
+    ChessMove moves[256];
+    int n = chess_get_all_moves(&app->game, mover, moves);
     for (int i = 0; i < n; i++) {
         if (moves[i].from_row != fr || moves[i].from_col != fc) continue;
-        /* verify move doesn't leave king in check */
         ChessGameState tmp = app->game;
         chess_make_move(&tmp, moves[i]);
-        if (!chess_is_in_check(&tmp, app->game.turn))
-            app->legal_dests[moves[i].to_row][moves[i].to_col] = true;
+        if (chess_is_in_check(&tmp, mover)) continue;  /* illegal */
+        int tr = moves[i].to_row, tc = moves[i].to_col;
+        app->legal_dests[tr][tc] = true;
+        /* After moving there, can the opponent immediately recapture? */
+        if (square_is_attacked(&tmp, tr, tc, opponent))
+            app->danger_squares[tr][tc] = true;
+        /* Does this move put the opponent king in check? */
+        if (chess_is_in_check(&tmp, opponent))
+            app->check_squares[tr][tc] = true;
     }
 }
 
@@ -463,7 +535,9 @@ static void game_new(App *app) {
     app->hover_col       = -1;
     memset(app->white_captured, 0, sizeof(app->white_captured));
     memset(app->black_captured, 0, sizeof(app->black_captured));
-    memset(app->legal_dests, 0, sizeof(app->legal_dests));
+    memset(app->legal_dests,    0, sizeof(app->legal_dests));
+    memset(app->danger_squares, 0, sizeof(app->danger_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
     app->move_history_count = 0;
     app->game.turn       = WHITE;
     snprintf(app->status, sizeof(app->status), "New game — White to move");
@@ -484,65 +558,6 @@ static void check_game_over(App *app) {
     }
 }
 
-static void apply_move(App *app, int fr, int fc, int tr, int tc) {
-    bool was_capture = (app->game.board[tr][tc].type != EMPTY);
-
-    /* Track captured pieces */
-    if (was_capture) {
-        ChessPiece cap = app->game.board[tr][tc];
-        if (app->game.turn == WHITE) app->white_captured[cap.type]++;
-        else                         app->black_captured[cap.type]++;
-    }
-
-    ChessMove mv = {fr, fc, tr, tc, 0};
-    chess_make_move(&app->game, mv);
-
-    app->last_from_row = fr; app->last_from_col = fc;
-    app->last_to_row   = tr; app->last_to_col   = tc;
-    app->has_last_move = true;
-    app->move_count++;
-    app->piece_selected = false;
-    memset(app->legal_dests, 0, sizeof(app->legal_dests));
-
-    /* Timers */
-    Uint32 now = SDL_GetTicks();
-    double elapsed = now - app->move_start_ms;
-    ChessColor just_moved = (app->game.turn == WHITE) ? BLACK : WHITE;
-    if (just_moved == WHITE) app->white_ms += elapsed;
-    else                     app->black_ms += elapsed;
-    app->move_start_ms = now;
-
-    /* Save history */
-    MoveHistory mh;
-    mh.game_state   = app->game;
-    mh.move         = mv;
-    mh.time_elapsed = elapsed / 1000.0;
-    if (app->move_history_count < MAX_MOVE_HISTORY * 2)
-        app->move_history[app->move_history_count++] = mh;
-
-    /* Check/checkmate/stalemate */
-    bool in_check = chess_is_in_check(&app->game, app->game.turn);
-    if (in_check) {
-        app->is_in_check = true;
-        app->check_timer = 1.5f;
-    } else {
-        app->is_in_check = false;
-        app->check_timer = 0;
-    }
-
-    if (was_capture) audio_play_capture();
-    else             audio_play_move();
-
-    check_game_over(app);
-
-    if (!app->is_checkmate && !app->is_stalemate) {
-        if (in_check) audio_play_check();
-        const char *turn = app->game.turn == WHITE ? "White" : "Black";
-        snprintf(app->status, sizeof(app->status), "%s to move", turn);
-        chess_start_thinking(&app->thinking, &app->game);
-    }
-}
-
 static void commit_move(App *app, int fr, int fc, int tr, int tc) {
     /* Check pawn promotion before animation */
     ChessPiece moving = app->game.board[fr][fc];
@@ -550,10 +565,17 @@ static void commit_move(App *app, int fr, int fc, int tr, int tc) {
                      ((moving.color == WHITE && tr == 7) ||
                       (moving.color == BLACK && tr == 0)));
 
+    /* Check capture before the board is modified */
+    bool was_capture = (app->game.board[tr][tc].type != EMPTY);
+
     /* Build post-animation game state */
     ChessGameState post = app->game;
     ChessMove mv = {fr, fc, tr, tc, 0};
     chess_make_move(&post, mv);
+
+    /* Play sound immediately (don't wait for animation to finish) */
+    if (was_capture) audio_play_capture();
+    else             audio_play_move();
 
     /* Start animation */
     start_animation(app, fr, fc, tr, tc, post);
@@ -592,7 +614,9 @@ static void finish_animation(App *app) {
     app->has_last_move = true;
     app->move_count++;
     app->piece_selected = false;
-    memset(app->legal_dests, 0, sizeof(app->legal_dests));
+    memset(app->legal_dests,    0, sizeof(app->legal_dests));
+    memset(app->danger_squares, 0, sizeof(app->danger_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
 
     Uint32 now = SDL_GetTicks();
     double elapsed = now - app->move_start_ms;
@@ -673,7 +697,9 @@ static void undo_move(App *app) {
     app->resigned        = false;
     app->check_timer     = 0;
     app->move_count      = app->move_history_count;
-    memset(app->legal_dests, 0, sizeof(app->legal_dests));
+    memset(app->legal_dests,    0, sizeof(app->legal_dests));
+    memset(app->danger_squares, 0, sizeof(app->danger_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
     snprintf(app->status, sizeof(app->status), "Move undone");
     chess_start_thinking(&app->thinking, &app->game);
 }
@@ -720,19 +746,30 @@ static void draw_board(App *app) {
                     sdl_fill_rect(r, rc.x, rc.y, rc.w, rc.h, 220, 50, 50, 180);
             }
 
-            /* Legal move hints — dot in centre of empty squares, ring on occupied */
+            /* Legal move hints:
+             *   dot/ring colour priority: check (yellow) > danger (red) > safe (dark) */
             if (app->piece_selected && app->legal_dests[row][col]) {
                 ChessPiece p = app->game.board[row][col];
+                bool danger = app->danger_squares[row][col];
+                bool gives_check = app->check_squares[row][col];
+                /* Colour: yellow=check, red=danger, dark=safe */
+                Uint8 hr = gives_check ? 220 : danger ? 180 : 0;
+                Uint8 hg = gives_check ? 200 : danger ?  40 : 0;
+                Uint8 hb = gives_check ?  30 : danger ?  40 : 0;
                 if (p.type == EMPTY) {
-                    /* small dot */
-                    sdl_fill_circle(r, rc.x+rc.w/2, rc.y+rc.h/2, rc.w/6, 0, 0, 0, 60);
+                    if (gives_check || danger)
+                        sdl_fill_circle(r, rc.x+rc.w/2, rc.y+rc.h/2, rc.w/6, hr, hg, hb, 160);
+                    else
+                        sdl_fill_circle(r, rc.x+rc.w/2, rc.y+rc.h/2, rc.w/6, 0, 0, 0, 60);
                 } else {
-                    /* corner triangles to indicate capturable */
                     int s = rc.w/4;
-                    sdl_fill_rect(r, rc.x,         rc.y,         s, s, 80, 200, 80, 160);
-                    sdl_fill_rect(r, rc.x+rc.w-s,  rc.y,         s, s, 80, 200, 80, 160);
-                    sdl_fill_rect(r, rc.x,         rc.y+rc.h-s,  s, s, 80, 200, 80, 160);
-                    sdl_fill_rect(r, rc.x+rc.w-s,  rc.y+rc.h-s,  s, s, 80, 200, 80, 160);
+                    Uint8 cr2 = gives_check ? hr : danger ? 200 : 80;
+                    Uint8 cg2 = gives_check ? hg : danger ?  40 : 200;
+                    Uint8 cb2 = gives_check ? hb : danger ?  40 : 80;
+                    sdl_fill_rect(r, rc.x,         rc.y,         s, s, cr2, cg2, cb2, 160);
+                    sdl_fill_rect(r, rc.x+rc.w-s,  rc.y,         s, s, cr2, cg2, cb2, 160);
+                    sdl_fill_rect(r, rc.x,         rc.y+rc.h-s,  s, s, cr2, cg2, cb2, 160);
+                    sdl_fill_rect(r, rc.x+rc.w-s,  rc.y+rc.h-s,  s, s, cr2, cg2, cb2, 160);
                 }
             }
 
@@ -771,12 +808,12 @@ static void draw_board(App *app) {
     for (int i = 0; i < 8; i++) {
         char buf[2] = {files[app->board_flipped ? 7-i : i], 0};
         render_text(r, g_font_sm, buf,
-                    BOARD_MARGIN_X + i*SQUARE_SIZE + SQUARE_SIZE/2 - 4,
-                    BOARD_MARGIN_Y + MENU_H + 8*SQUARE_SIZE + 2, 180, 160, 130);
+                    BOARD_MARGIN_X + i*SQUARE_SIZE + SQUARE_SIZE/2 - (int)(4*g_scale),
+                    BOARD_MARGIN_Y + MENU_H + 8*SQUARE_SIZE + (int)(2*g_scale), 180, 160, 130);
         char buf2[2] = {ranks[app->board_flipped ? 7-i : i], 0};
         render_text(r, g_font_sm, buf2,
-                    BOARD_MARGIN_X - 14,
-                    BOARD_MARGIN_Y + MENU_H + i*SQUARE_SIZE + SQUARE_SIZE/2 - 7,
+                    BOARD_MARGIN_X - (int)(14*g_scale),
+                    BOARD_MARGIN_Y + MENU_H + i*SQUARE_SIZE + SQUARE_SIZE/2 - (int)(7*g_scale),
                     180, 160, 130);
     }
 }
@@ -790,8 +827,8 @@ static void draw_captured_strip(App *app, ChessColor captured_color,
     /* Draw pieces captured from captured_color (i.e. owned by that color, now captured) */
     SDL_Renderer *r = app->renderer;
     int *counts = (captured_color == WHITE) ? app->white_captured : app->black_captured;
-    int x = BOARD_MARGIN_X;
-    int sz = 18;
+    int x = PANEL_X;
+    int sz = (int)(18 * g_scale);
     for (int type = PAWN; type <= QUEEN; type++) {
         for (int n = 0; n < counts[type]; n++) {
             SDL_Texture *tex = sdl_get_piece_texture((PieceType)type, (ChessColor)captured_color);
@@ -822,16 +859,16 @@ static void draw_promotion(App *app) {
     PieceType opts[] = {QUEEN, ROOK, BISHOP, KNIGHT};
     const char *labels[] = {"Q","R","B","N"};
     for (int i = 0; i < 4; i++) {
-        int bx2 = bx + 10 + i*56;
-        int by2 = by + 30;
-        bool hov = (app->mouse_x >= bx2 && app->mouse_x < bx2+50 &&
-                    app->mouse_y >= by2 && app->mouse_y < by2+56);
-        sdl_fill_rect(r, bx2, by2, 50, 56,
+        int bx2 = bx + 20 + i*152;
+        int by2 = by + 60;
+        bool hov = (app->mouse_x >= bx2 && app->mouse_x < bx2+(int)(50*g_scale) &&
+                    app->mouse_y >= by2 && app->mouse_y < by2+(int)(56*g_scale));
+        sdl_fill_rect(r, bx2, by2, (int)(50*g_scale), (int)(56*g_scale),
                       hov ? 70 : 45, hov ? 70 : 45, hov ? 90 : 60, 255);
-        sdl_draw_rect(r, bx2, by2, 50, 56, 150, 130, 80, 255);
+        sdl_draw_rect(r, bx2, by2, (int)(50*g_scale), (int)(56*g_scale), 150, 130, 80, 255);
         SDL_Texture *tex = sdl_get_piece_texture(opts[i], pc);
-        sdl_draw_piece(r, tex, bx2+25, by2+22, 38);
-        render_text_centered(r, g_font_sm, labels[i], bx2+25, by2+42, 200, 200, 200);
+        sdl_draw_piece(r, tex, bx2+(int)(25*g_scale), by2+(int)(22*g_scale), (int)(38*g_scale));
+        render_text_centered(r, g_font_sm, labels[i], bx2+(int)(25*g_scale), by2+(int)(44*g_scale), 200, 200, 200);
     }
 }
 
@@ -843,57 +880,57 @@ static void draw_panel(App *app) {
     SDL_Renderer *r = app->renderer;
     int x = PANEL_X, y = BOARD_MARGIN_Y + MENU_H;
 
-    sdl_fill_rect(r, x-4, y, PANEL_W+4, 8*SQUARE_SIZE, 35, 35, 42, 255);
+    sdl_fill_rect(r, x-(int)(4*g_scale), y, PANEL_W+(int)(4*g_scale), 8*SQUARE_SIZE, 35, 35, 42, 255);
 
-    render_text_centered(r, g_font_lg, "BeatChess", x+PANEL_W/2, y+6, 255, 220, 60);
-    y += 36;
+    render_text_centered(r, g_font_lg, "BeatChess", x+PANEL_W/2, y+(int)(6*g_scale), 255, 220, 60);
+    y += (int)(36*g_scale);
 
     const char *mode = app->player_vs_ai
         ? (app->player_is_white ? "Player(W) vs AI(B)" : "Player(B) vs AI(W)")
         : "AI vs AI";
     render_text(r, g_font_sm, mode, x, y, 160, 200, 230);
-    y += 20;
+    y += (int)(20*g_scale);
 
     char buf[128];
     const char *turn = app->game.turn == WHITE ? "White" : "Black";
     snprintf(buf, sizeof(buf), "Turn: %s  Move: %d", turn, app->move_count);
     render_text(r, g_font_sm, buf, x, y, 200, 200, 200);
-    y += 20;
+    y += (int)(20*g_scale);
 
     Uint8 sr = app->is_checkmate||app->resigned ? 255 : app->is_in_check ? 220 : 160;
     Uint8 sg = app->is_checkmate||app->resigned ?  60 : app->is_in_check ?  80 : 180;
     Uint8 sb = app->is_checkmate||app->resigned ?  60 : 200;
     render_text(r, g_font_sm, app->status, x, y, sr, sg, sb);
-    y += 26;
+    y += (int)(26*g_scale);
 
     long wm=(long)app->white_ms, bm=(long)app->black_ms;
     snprintf(buf,sizeof(buf),"White: %ld:%02ld.%03ld",wm/60000,(wm%60000)/1000,wm%1000);
     render_text(r, g_font_sm, buf, x, y, 220, 220, 220);
-    y += 16;
+    y += (int)(16*g_scale);
     snprintf(buf,sizeof(buf),"Black: %ld:%02ld.%03ld",bm/60000,(bm%60000)/1000,bm%1000);
     render_text(r, g_font_sm, buf, x, y, 180, 180, 180);
-    y += 22;
+    y += (int)(22*g_scale);
 
     if (app->ai_thinking) {
         render_text(r, g_font_sm, "AI thinking...", x, y, 100, 220, 255);
-        y += 18;
+        y += (int)(18*g_scale);
     }
 
     sdl_fill_rect(r, x, y, PANEL_W, 1, 70, 70, 90, 255);
-    y += 8;
+    y += (int)(8*g_scale);
 
     /* Buttons */
     bool game_over = app->is_checkmate || app->is_stalemate || app->resigned;
     Button btns[] = {
-        {x, y,     PANEL_W, 24, "N - New Game",        0, true},
-        {x, y+28,  PANEL_W, 24, "U - Undo",            0, !game_over},
-        {x, y+56,  PANEL_W, 24, "R - Resign",          0, !game_over && app->player_vs_ai},
-        {x, y+84,  PANEL_W, 24, "A - Toggle AI Mode",  0, true},
-        {x, y+112, PANEL_W, 24, "B - Swap Color",      0, true},
-        {x, y+140, PANEL_W, 24, "F - Flip Board",      0, true},
-        {x, y+168, PANEL_W, 24, g_music_on ? "M - Music: ON" : "M - Music: OFF", 0, true},
-        {x, y+196, PANEL_W, 24, "? - Help",            0, true},
-        {x, y+224, PANEL_W, 24, "Q - Quit",            0, true},
+        {x, y,                        PANEL_W, (int)(24*g_scale), "N - New Game",        0, true},
+        {x, y+(int)(28*g_scale),  PANEL_W, (int)(24*g_scale), "U - Undo",            0, !game_over},
+        {x, y+(int)(56*g_scale),  PANEL_W, (int)(24*g_scale), "R - Resign",          0, !game_over && app->player_vs_ai},
+        {x, y+(int)(84*g_scale),  PANEL_W, (int)(24*g_scale), "A - Toggle AI Mode",  0, true},
+        {x, y+(int)(112*g_scale), PANEL_W, (int)(24*g_scale), "B - Swap Color",      0, true},
+        {x, y+(int)(140*g_scale), PANEL_W, (int)(24*g_scale), "F - Flip Board",      0, true},
+        {x, y+(int)(168*g_scale), PANEL_W, (int)(24*g_scale), g_music_on ? "M - Music: ON" : "M - Music: OFF", 0, true},
+        {x, y+(int)(196*g_scale), PANEL_W, (int)(24*g_scale), "? - Help",            0, true},
+        {x, y+(int)(224*g_scale), PANEL_W, (int)(24*g_scale), "Q - Quit",            0, true},
     };
     for (int i = 0; i < 9; i++) {
         if (!btns[i].enabled) continue;
@@ -902,15 +939,32 @@ static void draw_panel(App *app) {
         if (i == 2) btn_draw(r, &btns[i], hov, false, 65, 30, 30);
         else        btn_draw(r, &btns[i], hov, false);
     }
-    y += 256;
+    y += (int)(256*g_scale);
 
-    /* Captured pieces */
-    if (y + 40 < BOARD_MARGIN_Y + MENU_H + 8*SQUARE_SIZE) {
-        render_text(r, g_font_sm, "Captured:", x, y, 140, 140, 160);
-        y += 14;
-        draw_captured_strip(app, BLACK, y, false);
-        y += 22;
-        draw_captured_strip(app, WHITE, y, false);
+    /* Captured pieces — pinned to bottom of panel, always visible */
+    {
+        int panel_bottom = BOARD_MARGIN_Y + MENU_H + 8*SQUARE_SIZE;
+        int cap_sz = (int)(16 * g_scale);
+        int cy = panel_bottom - cap_sz*2 - (int)(18*g_scale);
+        render_text(r, g_font_sm, "Captured:", x, cy - (int)(16*g_scale), 140, 140, 160);
+        /* Draw black captured (white pieces taken by black) */
+        int cx = x;
+        for (int type = PAWN; type <= QUEEN; type++) {
+            for (int n = 0; n < app->white_captured[type]; n++) {
+                SDL_Texture *tex = sdl_get_piece_texture((PieceType)type, WHITE);
+                sdl_draw_piece(r, tex, cx + cap_sz/2, cy + cap_sz/2, cap_sz);
+                cx += cap_sz + 1;
+            }
+        }
+        cx = x;
+        cy += cap_sz + 2;
+        for (int type = PAWN; type <= QUEEN; type++) {
+            for (int n = 0; n < app->black_captured[type]; n++) {
+                SDL_Texture *tex = sdl_get_piece_texture((PieceType)type, BLACK);
+                sdl_draw_piece(r, tex, cx + cap_sz/2, cy + cap_sz/2, cap_sz);
+                cx += cap_sz + 1;
+            }
+        }
     }
 }
 
@@ -922,13 +976,13 @@ static void draw_menubar(App *app) {
     SDL_Renderer *r = app->renderer;
     sdl_fill_rect(r, 0, 0, LOGICAL_W, MENU_H, 28, 28, 36, 255);
 
-    bool fhov = (app->mouse_x < 60 && app->mouse_y < MENU_H);
-    if (fhov || app->file_menu_open) sdl_fill_rect(r, 0, 0, 60, MENU_H, 55, 55, 70, 255);
-    render_text(r, g_font_sm, "File", 6, 4, 210, 210, 210);
+    bool fhov = (app->mouse_x < (int)(60*g_scale) && app->mouse_y < MENU_H);
+    if (fhov || app->file_menu_open) sdl_fill_rect(r, 0, 0, (int)(60*g_scale), MENU_H, 55, 55, 70, 255);
+    render_text(r, g_font_sm, "File", (int)(6*g_scale), (int)(4*g_scale), 210, 210, 210);
 
-    bool hhov = (app->mouse_x >= 60 && app->mouse_x < 120 && app->mouse_y < MENU_H);
-    if (hhov || app->help_menu_open) sdl_fill_rect(r, 60, 0, 60, MENU_H, 55, 55, 70, 255);
-    render_text(r, g_font_sm, "Help", 66, 4, 210, 210, 210);
+    bool hhov = (app->mouse_x >= (int)(60*g_scale) && app->mouse_x < (int)(120*g_scale) && app->mouse_y < MENU_H);
+    if (hhov || app->help_menu_open) sdl_fill_rect(r, (int)(60*g_scale), 0, (int)(60*g_scale), MENU_H, 55, 55, 70, 255);
+    render_text(r, g_font_sm, "Help", (int)(66*g_scale), (int)(4*g_scale), 210, 210, 210);
 
     render_text_centered(r, g_font_sm, "BeatChess SDL2 Edition", LOGICAL_W/2, 4, 255, 220, 60);
 
@@ -938,8 +992,8 @@ static void draw_menubar(App *app) {
         for (int i = 0; i < 7; i++) {
             if (items[i][0] == '-') { sdl_fill_rect(r,0,iy,180,1,70,70,90,255); iy+=2; continue; }
             bool h = (app->mouse_x<180 && app->mouse_y>=iy && app->mouse_y<iy+22);
-            sdl_fill_rect(r,0,iy,180,22,h?55:35,h?55:35,h?70:45,255);
-            render_text(r,g_font_sm,items[i],8,iy+4,210,210,210);
+            sdl_fill_rect(r,0,iy,(int)(180*g_scale),(int)(22*g_scale),h?55:35,h?55:35,h?70:45,255);
+            render_text(r,g_font_sm,items[i],(int)(8*g_scale),iy+(int)(4*g_scale),210,210,210);
             iy+=22;
         }
     }
@@ -948,8 +1002,8 @@ static void draw_menubar(App *app) {
         int iy = MENU_H;
         for (int i = 0; i < 2; i++) {
             bool h = (app->mouse_x>=60&&app->mouse_x<240&&app->mouse_y>=iy&&app->mouse_y<iy+22);
-            sdl_fill_rect(r,60,iy,180,22,h?55:35,h?55:35,h?70:45,255);
-            render_text(r,g_font_sm,items[i],68,iy+4,210,210,210);
+            sdl_fill_rect(r,(int)(60*g_scale),iy,(int)(180*g_scale),(int)(22*g_scale),h?55:35,h?55:35,h?70:45,255);
+            render_text(r,g_font_sm,items[i],(int)(68*g_scale),iy+(int)(4*g_scale),210,210,210);
             iy+=22;
         }
     }
@@ -967,17 +1021,17 @@ static void draw_overlay_text(App *app) {
     Uint8 mb = (app->is_checkmate||app->resigned) ?  60 : app->is_stalemate ? 180 :  80;
     int bx=BOARD_MARGIN_X, by=BOARD_MARGIN_Y+MENU_H, bw=8*SQUARE_SIZE, bh=8*SQUARE_SIZE;
     int tw,th; TTF_SizeUTF8(g_font_lg,msg,&tw,&th);
-    int ox=bx+(bw-tw)/2-16, oy=by+(bh-th)/2-12;
-    sdl_fill_rect(r,ox,oy,tw+32,th+24,10,10,10,210);
-    sdl_draw_rect(r,ox,oy,tw+32,th+24,mr,mg,mb,255);
-    render_text_centered(r,g_font_lg,msg,bx+bw/2,oy+12,mr,mg,mb);
+    int ox=bx+(bw-tw)/2-(int)(16*g_scale), oy=by+(bh-th)/2-(int)(12*g_scale);
+    sdl_fill_rect(r,ox,oy,tw+(int)(32*g_scale),th+(int)(24*g_scale),10,10,10,210);
+    sdl_draw_rect(r,ox,oy,tw+(int)(32*g_scale),th+(int)(24*g_scale),mr,mg,mb,255);
+    render_text_centered(r,g_font_lg,msg,bx+bw/2,oy+(int)(12*g_scale),mr,mg,mb);
 }
 
 static void draw_help_screen(App *app) {
     SDL_Renderer *r = app->renderer;
     sdl_fill_rect(r,0,0,LOGICAL_W,LOGICAL_H,15,15,20,240);
-    int y = 40;
-    render_text_centered(r,g_font_lg,"BeatChess — Help",LOGICAL_W/2,y,255,220,60); y+=40;
+    int y = (int)(40*g_scale);
+    render_text_centered(r,g_font_lg,"BeatChess — Help",LOGICAL_W/2,y,255,220,60); y+=(int)(40*g_scale);
     const char *lines[] = {
         "N          New Game",
         "U          Undo move (Player vs AI: undoes AI move too)",
@@ -997,19 +1051,19 @@ static void draw_help_screen(App *app) {
         NULL
     };
     for (int i = 0; lines[i]; i++) {
-        if (lines[i][0]) render_text(r,g_font_sm,lines[i],100,y,200,200,200);
-        y += 19;
+        if (lines[i][0]) render_text(r,g_font_sm,lines[i],(int)(100*g_scale),y,200,200,200);
+        y += (int)(19*g_scale);
     }
 }
 
 static void draw_about_screen(App *app) {
     SDL_Renderer *r = app->renderer;
     sdl_fill_rect(r,0,0,LOGICAL_W,LOGICAL_H,15,15,20,240);
-    int y=60;
-    render_text_centered(r,g_font_lg,"BeatChess",LOGICAL_W/2,y,255,220,60); y+=30;
-    render_text_centered(r,g_font_med,"SDL2 Edition",LOGICAL_W/2,y,180,180,200); y+=40;
-    render_text_centered(r,g_font_sm,"Copyright (c) 2025 Jason Brian Hall",LOGICAL_W/2,y,160,200,230); y+=25;
-    render_text_centered(r,g_font_sm,"MIT License",LOGICAL_W/2,y,100,200,100); y+=40;
+    int y=(int)(60*g_scale);
+    render_text_centered(r,g_font_lg,"BeatChess",LOGICAL_W/2,y,255,220,60); y+=(int)(30*g_scale);
+    render_text_centered(r,g_font_med,"SDL2 Edition",LOGICAL_W/2,y,180,180,200); y+=(int)(40*g_scale);
+    render_text_centered(r,g_font_sm,"Copyright (c) 2025 Jason Brian Hall",LOGICAL_W/2,y,160,200,230); y+=(int)(25*g_scale);
+    render_text_centered(r,g_font_sm,"MIT License",LOGICAL_W/2,y,100,200,100); y+=(int)(40*g_scale);
     render_text_centered(r,g_font_sm,"Press any key or click to return.",LOGICAL_W/2,y,140,140,160);
 }
 
@@ -1017,27 +1071,46 @@ static void draw_file_dialog(App *app, bool is_save) {
     SDL_Renderer *r = app->renderer;
     sdl_fill_rect(r,0,0,LOGICAL_W,LOGICAL_H,15,15,20,230);
     render_text_centered(r,g_font_lg,is_save?"Save Game":"Load Game",LOGICAL_W/2,20,255,220,60);
-    int lx=60,ly=60,lw=LOGICAL_W-120,lh=360;
+    int lx=(int)(60*g_scale),ly=(int)(60*g_scale),lw=LOGICAL_W-(int)(120*g_scale),lh=(int)(360*g_scale);
     sdl_draw_rect(r,lx,ly,lw,lh,80,80,110,255);
-    int visible=lh/24;
+    int visible=lh/((int)(24*g_scale));
     for (int i=0; i<visible && (i+app->fb.scroll)<app->fb.count; i++) {
-        int fi=i+app->fb.scroll; bool sel=(fi==app->fb.selected); int ry=ly+i*24;
-        if (sel) sdl_fill_rect(r,lx+1,ry,lw-2,24,60,80,120,255);
-        render_text(r,g_font_sm,app->fb.entries[fi].name,lx+10,ry+5,
+        int fi=i+app->fb.scroll; bool sel=(fi==app->fb.selected); int ry=ly+i*48;
+        if (sel) sdl_fill_rect(r,lx+1,ry,lw-2,(int)(24*g_scale),60,80,120,255);
+        render_text(r,g_font_sm,app->fb.entries[fi].name,lx+(int)(10*g_scale),ry+(int)(5*g_scale),
                     sel?255:200,sel?255:200,sel?255:200);
     }
     if (app->fb.count==0)
-        render_text_centered(r,g_font_sm,"(no .sav files found)",LOGICAL_W/2,ly+lh/2-10,140,140,160);
+        render_text_centered(r,g_font_sm,"(no .sav files found)",LOGICAL_W/2,ly+lh/2-(int)(10*g_scale),140,140,160);
     if (is_save) {
-        render_text(r,g_font_sm,"Filename:",lx,ly+lh+16,180,180,180);
-        sdl_draw_rect(r,lx,ly+lh+32,400,26,100,100,140,255);
+        render_text(r,g_font_sm,"Filename:",lx,ly+lh+(int)(16*g_scale),180,180,180);
+        sdl_draw_rect(r,lx,ly+lh+(int)(32*g_scale),(int)(400*g_scale),(int)(26*g_scale),100,100,140,255);
         char disp[260]; snprintf(disp,sizeof(disp),"%s_",app->fb_input);
-        render_text(r,g_font_sm,disp,lx+6,ly+lh+37,220,220,100);
+        render_text(r,g_font_sm,disp,lx+(int)(6*g_scale),ly+lh+(int)(37*g_scale),220,220,100);
     }
     render_text(r,g_font_sm,
                 is_save?"Enter: Save    Esc: Cancel    Up/Down: Browse"
                        :"Enter/dbl-click: Load    Esc: Cancel",
                 lx,ly+lh+62,120,180,120);
+}
+
+static void draw_confirm_new_game(App *app) {
+    SDL_Renderer *r = app->renderer;
+    /* dim the background */
+    sdl_fill_rect(r, 0, 0, LOGICAL_W, LOGICAL_H, 0, 0, 0, 160);
+
+    int bw = (int)(320*g_scale), bh = (int)(110*g_scale);
+    int bx = (LOGICAL_W - bw) / 2, by = (LOGICAL_H - bh) / 2;
+    sdl_fill_rect(r, bx, by, bw, bh, 30, 30, 40, 255);
+    sdl_draw_rect(r, bx, by, bw, bh, 160, 140, 80, 255);
+
+    render_text_centered(r, g_font_med, "Start a new game?", LOGICAL_W/2, by + (int)(14*g_scale), 240, 220, 120);
+
+    /* Yes button */
+    Button yes_btn = {bx+(int)(30*g_scale), by+(int)(55*g_scale), (int)(110*g_scale), (int)(34*g_scale), "Yes", 0, true};
+    Button no_btn  = {bx+bw-(int)(140*g_scale), by+(int)(55*g_scale), (int)(110*g_scale), (int)(34*g_scale), "No",  0, true};
+    btn_draw(r, &yes_btn, btn_hovered(&yes_btn, app->mouse_x, app->mouse_y), false, 30, 60, 30);
+    btn_draw(r, &no_btn,  btn_hovered(&no_btn,  app->mouse_x, app->mouse_y), false, 60, 30, 30);
 }
 
 static void draw_frame(App *app) {
@@ -1053,6 +1126,7 @@ static void draw_frame(App *app) {
             draw_panel(app);
             draw_overlay_text(app);
             if (app->awaiting_promotion) draw_promotion(app);
+            if (app->confirm_new_game)   draw_confirm_new_game(app);
             draw_menubar(app);
             break;
     }
@@ -1063,9 +1137,15 @@ static void draw_frame(App *app) {
  * Input handling
  * ============================================================================ */
 
+static void request_new_game(App *app) {
+    /* If game hasn't started yet, just start without asking */
+    if (app->move_count == 0) { game_new(app); return; }
+    app->confirm_new_game = true;
+}
+
 static void handle_game_key(App *app, SDL_Keycode key) {
     switch (key) {
-        case SDLK_n: game_new(app); break;
+        case SDLK_n: request_new_game(app); break;
         case SDLK_u: undo_move(app); break;
         case SDLK_r: player_resign(app); break;
         case SDLK_a:
@@ -1099,8 +1179,8 @@ static void handle_promotion_click(App *app, int px, int py) {
     int by = BOARD_MARGIN_Y + MENU_H + 8*SQUARE_SIZE/2 - 50;
     PieceType opts[] = {QUEEN, ROOK, BISHOP, KNIGHT};
     for (int i = 0; i < 4; i++) {
-        int bx2 = bx + 10 + i*56, by2 = by + 30;
-        if (px >= bx2 && px < bx2+50 && py >= by2 && py < by2+56) {
+        int bx2 = bx + (int)(10*g_scale) + i*(int)(56*g_scale), by2 = by + (int)(30*g_scale);
+        if (px >= bx2 && px < bx2+(int)(50*g_scale) && py >= by2 && py < by2+(int)(56*g_scale)) {
             app->game.board[app->promo_row][app->promo_col].type = opts[i];
             app->awaiting_promotion = false;
             /* Now run the post-move logic */
@@ -1161,7 +1241,9 @@ static void handle_board_click(App *app, int px, int py) {
         int fr = app->selected_row, fc = app->selected_col;
         if (fr == row && fc == col) {
             app->piece_selected = false;
-            memset(app->legal_dests, 0, sizeof(app->legal_dests));
+            memset(app->legal_dests,    0, sizeof(app->legal_dests));
+    memset(app->danger_squares, 0, sizeof(app->danger_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
             return;
         }
         ChessColor tc = app->player_vs_ai ? player_color : app->game.turn;
@@ -1180,32 +1262,33 @@ static void handle_board_click(App *app, int px, int py) {
                     ChessPiece cap = app->game.board[row][col];
                     if (app->game.turn==WHITE) app->white_captured[cap.type]++;
                     else                       app->black_captured[cap.type]++;
-                    audio_play_capture();
-                } else {
-                    audio_play_move();
                 }
                 commit_move(app, fr, fc, row, col);
             } else {
                 snprintf(app->status, sizeof(app->status), "Illegal — king in check");
                 app->piece_selected = false;
-                memset(app->legal_dests, 0, sizeof(app->legal_dests));
+                memset(app->legal_dests,    0, sizeof(app->legal_dests));
+    memset(app->danger_squares, 0, sizeof(app->danger_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
             }
         } else {
             snprintf(app->status, sizeof(app->status), "Illegal move");
             app->piece_selected = false;
-            memset(app->legal_dests, 0, sizeof(app->legal_dests));
+            memset(app->legal_dests,    0, sizeof(app->legal_dests));
+    memset(app->danger_squares, 0, sizeof(app->danger_squares));
+    memset(app->check_squares,  0, sizeof(app->check_squares));
         }
     }
 }
 
 static void handle_menu_click(App *app, int px, int py) {
     if (py < MENU_H) {
-        if (px < 60) { app->file_menu_open=!app->file_menu_open; app->help_menu_open=false; return; }
-        if (px < 120){ app->help_menu_open=!app->help_menu_open; app->file_menu_open=false; return; }
+        if (px < (int)(60*g_scale)) { app->file_menu_open=!app->file_menu_open; app->help_menu_open=false; return; }
+        if (px < (int)(120*g_scale)){ app->help_menu_open=!app->help_menu_open; app->file_menu_open=false; return; }
         app->file_menu_open=app->help_menu_open=false; return;
     }
-    if (app->file_menu_open && px < 180) {
-        int ihs[]={22,22,2,22,22,2,22}; int iy=MENU_H;
+    if (app->file_menu_open && px < (int)(180*g_scale)) {
+        int ihs[]={(int)(22*g_scale),(int)(22*g_scale),(int)(2*g_scale),(int)(22*g_scale),(int)(22*g_scale),(int)(2*g_scale),(int)(22*g_scale)}; int iy=MENU_H;
         for (int i=0;i<7;i++){
             if (py>=iy && py<iy+ihs[i]) {
                 app->file_menu_open=false;
@@ -1222,7 +1305,7 @@ static void handle_menu_click(App *app, int px, int py) {
         }
         app->file_menu_open=false; return;
     }
-    if (app->help_menu_open && px>=60 && px<240) {
+    if (app->help_menu_open && px>=(int)(60*g_scale) && px<(int)(240*g_scale)) {
         int iy=MENU_H;
         for (int i=0;i<2;i++){
             if (py>=iy&&py<iy+22){app->help_menu_open=false;if(i==0)app->screen=SCREEN_HELP;else app->screen=SCREEN_ABOUT;return;}
@@ -1234,14 +1317,14 @@ static void handle_menu_click(App *app, int px, int py) {
 
     /* Panel buttons */
     bool game_over = app->is_checkmate || app->is_stalemate || app->resigned;
-    int base_y = BOARD_MARGIN_Y + MENU_H + 36 + 20 + 20 + 26 + 16 + 22 + 8;
+    int base_y = BOARD_MARGIN_Y + MENU_H + (int)((36+20+20+26+16+22+8)*g_scale);
     if (px >= PANEL_X && px < LOGICAL_W) {
-        int bys[]={0,28,56,84,112,140,168,196,224};
+        int bys[]={0,(int)(28*g_scale),(int)(56*g_scale),(int)(84*g_scale),(int)(112*g_scale),(int)(140*g_scale),(int)(168*g_scale),(int)(196*g_scale),(int)(224*g_scale)};
         SDL_Keycode ks[]={SDLK_n,SDLK_u,SDLK_r,SDLK_a,SDLK_b,SDLK_f,SDLK_m,SDLK_QUESTION,SDLK_q};
         for (int i=0;i<9;i++){
             if (i==1&&game_over) continue;
             if (i==2&&(game_over||!app->player_vs_ai)) continue;
-            if (py>=base_y+bys[i]&&py<base_y+bys[i]+24){handle_game_key(app,ks[i]);return;}
+            if (py>=base_y+bys[i]&&py<base_y+bys[i]+(int)(24*g_scale)){handle_game_key(app,ks[i]);return;}
         }
         return;
     }
@@ -1307,10 +1390,10 @@ static void update_cursor(App *app) {
     if (app->screen != SCREEN_GAME) { set_cursor(g_cursor_arrow); return; }
     if (app->awaiting_promotion) {
         /* check over promotion buttons */
-        int bx=BOARD_MARGIN_X+8*SQUARE_SIZE/2-120, by=BOARD_MARGIN_Y+MENU_H+8*SQUARE_SIZE/2-50;
+        int bx=BOARD_MARGIN_X+8*SQUARE_SIZE/2-(int)(160*g_scale), by=BOARD_MARGIN_Y+MENU_H+8*SQUARE_SIZE/2-(int)(55*g_scale);
         for (int i=0;i<4;i++){
-            int bx2=bx+10+i*56, by2=by+30;
-            if (app->mouse_x>=bx2&&app->mouse_x<bx2+50&&app->mouse_y>=by2&&app->mouse_y<by2+56){
+            int bx2=bx+(int)(10*g_scale)+i*(int)(56*g_scale), by2=by+(int)(30*g_scale);
+            if (app->mouse_x>=bx2&&app->mouse_x<bx2+(int)(50*g_scale)&&app->mouse_y>=by2&&app->mouse_y<by2+(int)(56*g_scale)){
                 set_cursor(g_cursor_hand); return;
             }
         }
@@ -1385,7 +1468,6 @@ static void update_ai(App *app, float dt) {
         if (app->game.turn==WHITE) app->white_captured[cap.type]++;
         else                       app->black_captured[cap.type]++;
     }
-
     commit_move(app, mv.from_row, mv.from_col, mv.to_row, mv.to_col);
     app->ai_thinking = false;
 }
@@ -1408,13 +1490,17 @@ int main(int argc, char *argv[]) {
 
     app->window = SDL_CreateWindow("BeatChess SDL2",
                                     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                    WINDOW_W, WINDOW_H, SDL_WINDOW_RESIZABLE);
+                                    900, 640, SDL_WINDOW_RESIZABLE);
     if (!app->window) { fprintf(stderr,"Window: %s\n",SDL_GetError()); return 1; }
 
     app->renderer = SDL_CreateRenderer(app->window, -1,
                                         SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
     if (!app->renderer) { fprintf(stderr,"Renderer: %s\n",SDL_GetError()); return 1; }
 
+    /* Layout scales to actual window size */
+    int iw, ih;
+    SDL_GetWindowSize(app->window, &iw, &ih);
+    layout_update(iw, ih);
     SDL_RenderSetLogicalSize(app->renderer, LOGICAL_W, LOGICAL_H);
 
     cursors_init();
@@ -1425,6 +1511,7 @@ int main(int argc, char *argv[]) {
     sdl_show_splashscreen(app->renderer, LOGICAL_W, LOGICAL_H);
 
     fonts_init();
+    fonts_rebuild();  /* apply layout-computed sizes */
     audio_init();
 
     chess_init_zobrist();
@@ -1458,7 +1545,9 @@ int main(int argc, char *argv[]) {
                     if (app->screen==SCREEN_SAVE){handle_dialog_key(app,k,true);break;}
                     if (app->screen==SCREEN_LOAD){handle_dialog_key(app,k,false);break;}
                     if (app->awaiting_promotion) break; /* ignore keys during promotion */
+                    if (app->confirm_new_game) { if(k==SDLK_y){app->confirm_new_game=false;game_new(app);} else if(k==SDLK_n){app->confirm_new_game=false;} break; }
                     if (k==SDLK_ESCAPE){
+                        if (app->confirm_new_game){app->confirm_new_game=false;break;}
                         if (app->file_menu_open||app->help_menu_open){app->file_menu_open=app->help_menu_open=false;}
                         else app->running=false;
                         break;
@@ -1486,9 +1575,9 @@ int main(int argc, char *argv[]) {
                         app->mouse_x=px; app->mouse_y=py;
                         if (app->screen==SCREEN_HELP||app->screen==SCREEN_ABOUT){app->screen=SCREEN_GAME;break;}
                         if (app->screen==SCREEN_SAVE||app->screen==SCREEN_LOAD){
-                            int ly=60,lh=360;
+                            int ly=(int)(60*g_scale),lh=(int)(360*g_scale);
                             if (px>=60&&px<LOGICAL_W-60&&py>=ly&&py<ly+lh){
-                                int idx=(py-ly)/24+app->fb.scroll;
+                                int idx=(py-ly)/((int)(24*g_scale))+app->fb.scroll;
                                 if (idx>=0&&idx<app->fb.count){
                                     if (idx==app->fb.selected&&app->screen==SCREEN_LOAD)
                                         handle_dialog_key(app,SDLK_RETURN,false);
@@ -1498,6 +1587,18 @@ int main(int argc, char *argv[]) {
                             break;
                         }
                         if (app->awaiting_promotion){handle_promotion_click(app,px,py);break;}
+                        if (app->confirm_new_game) {
+                            /* Check yes/no buttons */
+                            int bw=(int)(320*g_scale),bh=(int)(110*g_scale),bx=(LOGICAL_W-bw)/2,by=(LOGICAL_H-bh)/2;
+                            if (px>=bx+(int)(30*g_scale)&&px<bx+(int)(140*g_scale)&&py>=by+(int)(55*g_scale)&&py<by+(int)(89*g_scale)) {
+                                app->confirm_new_game=false; game_new(app);
+                            } else if (px>=bx+bw-(int)(140*g_scale)&&px<bx+bw-(int)(30*g_scale)&&py>=by+(int)(55*g_scale)&&py<by+(int)(89*g_scale)) {
+                                app->confirm_new_game=false;
+                            } else {
+                                app->confirm_new_game=false; /* click outside = cancel */
+                            }
+                            break;
+                        }
                         handle_menu_click(app,px,py);
                     }
                     break;
@@ -1511,7 +1612,15 @@ int main(int argc, char *argv[]) {
                     break;
 
                 case SDL_WINDOWEVENT:
-                    if (ev.window.event==SDL_WINDOWEVENT_CLOSE) app->running=false;
+                    if (ev.window.event==SDL_WINDOWEVENT_CLOSE) {
+                        app->running=false;
+                    } else if (ev.window.event==SDL_WINDOWEVENT_RESIZED ||
+                               ev.window.event==SDL_WINDOWEVENT_SIZE_CHANGED) {
+                        int nw = ev.window.data1, nh = ev.window.data2;
+                        layout_update(nw, nh);
+                        SDL_RenderSetLogicalSize(app->renderer, LOGICAL_W, LOGICAL_H);
+                        fonts_rebuild();
+                    }
                     break;
             }
         }
