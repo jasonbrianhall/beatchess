@@ -16,12 +16,10 @@
  *   Q / Esc  - Quit
  */
 
-#define MSDOS  /* exclude GTK blocks in visualization.h */
 #include "beatchess.h"
 #include "visualization.h"
 #include "chess_ai_move.h"
 #include "pgn.h"
-#include "chess_pieces.h"
 #include "chess_pieces_loader_sdl.h"
 #include "DejaVuMono.h"
 #include "DejaVuMonoBold.h"
@@ -108,87 +106,6 @@ static void sdl_fill_circle(SDL_Renderer *r, int cx, int cy, int radius,
     }
 }
 
-/* Simple piece glyphs drawn with primitives */
-static void draw_piece_primitive(SDL_Renderer *r, PieceType type, ChessColor color,
-                                  int cx, int cy, int sz) {
-    /* Base colours */
-    Uint8 pr = color == WHITE ? 245 : 30;
-    Uint8 pg = color == WHITE ? 245 : 30;
-    Uint8 pb = color == WHITE ? 245 : 30;
-    Uint8 or_ = color == WHITE ? 80  : 200;
-    Uint8 og  = color == WHITE ? 80  : 200;
-    Uint8 ob  = color == WHITE ? 80  : 200;
-
-    int h = sz / 2;
-
-    switch (type) {
-        case PAWN:
-            sdl_fill_circle(r, cx, cy - h/4, h/3, pr, pg, pb, 255);
-            sdl_fill_rect(r, cx - h/4, cy, h/2, h/2, pr, pg, pb, 255);
-            sdl_fill_rect(r, cx - h/3, cy + h/2, h*2/3, h/6, or_, og, ob, 255);
-            break;
-
-        case KNIGHT:
-            /* Body */
-            sdl_fill_rect(r, cx - h/3, cy - h/2, h*2/3, h, pr, pg, pb, 255);
-            /* Head bump */
-            sdl_fill_circle(r, cx + h/6, cy - h/2, h/3, pr, pg, pb, 255);
-            /* Base */
-            sdl_fill_rect(r, cx - h/2, cy + h/2, h, h/6, or_, og, ob, 255);
-            /* Eye */
-            sdl_fill_circle(r, cx + h/4, cy - h/2, h/8,
-                             color == WHITE ? 30 : 220,
-                             color == WHITE ? 30 : 220,
-                             color == WHITE ? 30 : 220, 255);
-            break;
-
-        case BISHOP:
-            /* Shaft */
-            sdl_fill_rect(r, cx - h/5, cy - h*3/4, h*2/5, h*3/2, pr, pg, pb, 255);
-            /* Top ball */
-            sdl_fill_circle(r, cx, cy - h*3/4, h/4, pr, pg, pb, 255);
-            /* Base */
-            sdl_fill_rect(r, cx - h/2, cy + h*3/4, h, h/6, or_, og, ob, 255);
-            break;
-
-        case ROOK:
-            /* Tower */
-            sdl_fill_rect(r, cx - h/2, cy - h/2, h, h, pr, pg, pb, 255);
-            /* Battlements */
-            sdl_fill_rect(r, cx - h/2,   cy - h*3/4, h/4, h/4, pr, pg, pb, 255);
-            sdl_fill_rect(r, cx + h/4,   cy - h*3/4, h/4, h/4, pr, pg, pb, 255);
-            /* Base */
-            sdl_fill_rect(r, cx - h/2, cy + h/2, h, h/6, or_, og, ob, 255);
-            break;
-
-        case QUEEN:
-            /* Crown */
-            sdl_fill_circle(r, cx,        cy - h*3/4, h/5, or_, og, ob, 255);
-            sdl_fill_circle(r, cx - h/3,  cy - h/2,   h/5, or_, og, ob, 255);
-            sdl_fill_circle(r, cx + h/3,  cy - h/2,   h/5, or_, og, ob, 255);
-            /* Body */
-            sdl_fill_rect(r, cx - h/2, cy - h/2, h, h, pr, pg, pb, 255);
-            /* Base */
-            sdl_fill_rect(r, cx - h/2, cy + h/2, h, h/6, or_, og, ob, 255);
-            break;
-
-        case KING:
-            /* Cross */
-            sdl_fill_rect(r, cx - h/8, cy - h,     h/4, h/2, or_, og, ob, 255);
-            sdl_fill_rect(r, cx - h/3, cy - h*3/4, h*2/3, h/4, or_, og, ob, 255);
-            /* Body */
-            sdl_fill_rect(r, cx - h/2, cy - h/2, h, h, pr, pg, pb, 255);
-            /* Base */
-            sdl_fill_rect(r, cx - h/2, cy + h/2, h, h/6, or_, og, ob, 255);
-            break;
-
-        default: break;
-    }
-
-    /* Outline */
-    sdl_draw_rect(r, cx - h/2 - 1, cy - h - 1, h + 2, h*2 + 2, or_, og, ob, 180);
-}
-
 /* ============================================================================
  * Text rendering via SDL_ttf
  * ============================================================================ */
@@ -224,7 +141,7 @@ static unsigned char *b64_decode(const char *src, size_t src_len, size_t *out_le
     size_t decoded_len = (valid / 4) * 3;
     unsigned char *dst = (unsigned char *)malloc(decoded_len + 4);
     if (!dst) return NULL;
-    size_t di = 0, si = 0;
+    size_t di = 0;
     unsigned char buf[4];
     int bi = 0;
     for (size_t i = 0; i < src_len && di < decoded_len; i++) {
@@ -248,17 +165,6 @@ static unsigned char *b64_decode(const char *src, size_t src_len, size_t *out_le
 
 static unsigned char *g_font_buf_regular = NULL;
 static unsigned char *g_font_buf_bold    = NULL;
-
-static TTF_Font *font_from_b64(const char *b64, size_t b64_len,
-                                 unsigned char **buf_out, int ptsize) {
-    size_t decoded_len = 0;
-    *buf_out = b64_decode(b64, b64_len, &decoded_len);
-    if (!*buf_out) return NULL;
-    SDL_RWops *rw = SDL_RWFromMem(*buf_out, (int)decoded_len);
-    if (!rw) { free(*buf_out); *buf_out = NULL; return NULL; }
-    TTF_Font *f = TTF_OpenFontRW(rw, 1, ptsize); /* 1 = SDL frees RW */
-    return f;
-}
 
 static bool fonts_init(void) {
     if (TTF_Init() != 0) {

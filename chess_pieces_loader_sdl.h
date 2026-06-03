@@ -1,94 +1,88 @@
 /*
- * chess_pieces_loader_sdl.h - SDL2 replacement for chess_pieces_loader.h
+ * chess_pieces_loader_sdl.h - SDL2 chess piece loader using NanoSVG
  *
- * Loads the same embedded 24-bit BMP data from chess_pieces.h using SDL2
- * textures instead of Allegro BITMAPs. Green pixels (g > r+30 && g > b+30
- * && g > 200) are treated as transparent, matching the Allegro loader.
+ * Rasterizes embedded SVG data from chess_pieces_svg.h at runtime.
+ * Requires nanosvg.h and nanosvgrast.h in the project directory:
+ *   https://github.com/memononen/nanosvg
  *
- * Also provides sdl_load_splashscreen() for the JPEG splash via stb_image.
- *
- * Usage:
- *   #include "chess_pieces.h"
- *   #include "chess_pieces_loader_sdl.h"
- *   ...
- *   sdl_load_chess_pieces(renderer);
- *   SDL_Texture *t = sdl_get_piece_texture(KING, WHITE);
- *   sdl_draw_piece(renderer, t, cx, cy, size);
- *   sdl_destroy_chess_pieces();
+ * Also provides sdl_show_splashscreen() for the JPEG splash via stb_image.
  */
 
 #ifndef CHESS_PIECES_LOADER_SDL_H
 #define CHESS_PIECES_LOADER_SDL_H
 
 #include <SDL2/SDL.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include "beatchess.h"   /* PieceType, ChessColor */
-#include "chess_pieces.h"
+#include "beatchess.h"
+#include "chess_pieces_svg.h"
 
-/* stb_image for JPEG splash — define implementation once here */
+/* NanoSVG — define implementations exactly once here */
+#define NANOSVG_IMPLEMENTATION
+#define NANOSVG_ALL_COLOR_KEYWORDS
+#include "nanosvg.h"
+#define NANOSVGRAST_IMPLEMENTATION
+#include "nanosvgrast.h"
+
+/* stb_image for JPEG splash */
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
 #define STBI_NO_STDIO
 #include "stb_image.h"
 
 /* ============================================================================
- * BMP loader — 24-bit uncompressed, green = transparent
+ * SVG -> SDL_Texture
  * ============================================================================ */
 
-static SDL_Texture *sdl_load_bmp_from_memory(SDL_Renderer *renderer,
+static SDL_Texture *sdl_load_svg_from_memory(SDL_Renderer *renderer,
                                                const unsigned char *data,
-                                               unsigned int len) {
-    if (len < 54 || data[0] != 'B' || data[1] != 'M') return NULL;
+                                               unsigned int len,
+                                               int render_size) {
+    /* NanoSVG needs a null-terminated mutable char buffer */
+    char *buf = (char *)malloc(len + 1);
+    if (!buf) return NULL;
+    memcpy(buf, data, len);
+    buf[len] = '\0';
 
-    int data_offset = data[10] | (data[11]<<8) | (data[12]<<16) | (data[13]<<24);
-    int width  = data[18] | (data[19]<<8) | (data[20]<<16) | (data[21]<<24);
-    int height = data[22] | (data[23]<<8) | (data[24]<<16) | (data[25]<<24);
-    int bpp    = data[28] | (data[29]<<8);
+    NSVGimage *image = nsvgParse(buf, "px", 96.0f);
+    free(buf);
+    if (!image) return NULL;
 
-    if (height < 0) height = -height;
-    if (width <= 0 || height <= 0 || width > 2048 || height > 2048) return NULL;
-    if (bpp != 24) return NULL;
+    NSVGrasterizer *rast = nsvgCreateRasterizer();
+    if (!rast) { nsvgDelete(image); return NULL; }
 
-    SDL_Surface *surf = SDL_CreateRGBSurface(0, width, height, 32,
-                                              0x00FF0000, 0x0000FF00,
-                                              0x000000FF, 0xFF000000);
-    if (!surf) return NULL;
-
-    int bytes_per_row = ((width * 3 + 3) / 4) * 4;
-    const unsigned char *pixel_data = data + data_offset;
-
-    SDL_LockSurface(surf);
-    Uint32 *pixels = (Uint32 *)surf->pixels;
-
-    for (int row = 0; row < height; row++) {
-        const unsigned char *src = pixel_data + (height - 1 - row) * bytes_per_row;
-        Uint32 *dst = pixels + row * width;
-        for (int col = 0; col < width; col++) {
-            unsigned char b = src[col*3 + 0];
-            unsigned char g = src[col*3 + 1];
-            unsigned char r = src[col*3 + 2];
-            /* Transparent: r==0, b==0, any green value (antialiased mask) */
-            if (r == 0 && b == 0 && g > 0) {
-                dst[col] = 0x00000000;  /* fully transparent */
-            } else {
-                dst[col] = (0xFF << 24) | (r << 16) | (g << 8) | b;
-            }
-        }
+    unsigned char *pixels = (unsigned char *)malloc(render_size * render_size * 4);
+    if (!pixels) {
+        nsvgDeleteRasterizer(rast);
+        nsvgDelete(image);
+        return NULL;
     }
 
-    SDL_UnlockSurface(surf);
+    float scale = (float)render_size / (image->width > 0 ? image->width : 45.0f);
+    nsvgRasterize(rast, image, 0, 0, scale, pixels, render_size, render_size,
+                  render_size * 4);
 
-    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-    SDL_FreeSurface(surf);
+    nsvgDeleteRasterizer(rast);
+    nsvgDelete(image);
 
-    if (tex) SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_Texture *tex = SDL_CreateTexture(renderer,
+                                          SDL_PIXELFORMAT_RGBA32,
+                                          SDL_TEXTUREACCESS_STATIC,
+                                          render_size, render_size);
+    if (!tex) { free(pixels); return NULL; }
+
+    SDL_UpdateTexture(tex, NULL, pixels, render_size * 4);
+    free(pixels);
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
     return tex;
 }
 
 /* ============================================================================
  * Piece texture storage
  * ============================================================================ */
+
+#define SVG_RENDER_SIZE 128
 
 typedef struct {
     SDL_Texture *white_king,   *white_queen,  *white_rook;
@@ -100,18 +94,18 @@ typedef struct {
 static SdlPieceTextures sdl_piece_textures;
 
 static int sdl_load_chess_pieces(SDL_Renderer *renderer) {
-    sdl_piece_textures.white_king   = sdl_load_bmp_from_memory(renderer, white_king_bmp,   white_king_bmp_len);
-    sdl_piece_textures.white_queen  = sdl_load_bmp_from_memory(renderer, white_queen_bmp,  white_queen_bmp_len);
-    sdl_piece_textures.white_rook   = sdl_load_bmp_from_memory(renderer, white_rook_bmp,   white_rook_bmp_len);
-    sdl_piece_textures.white_bishop = sdl_load_bmp_from_memory(renderer, white_bishop_bmp, white_bishop_bmp_len);
-    sdl_piece_textures.white_knight = sdl_load_bmp_from_memory(renderer, white_knight_bmp, white_knight_bmp_len);
-    sdl_piece_textures.white_pawn   = sdl_load_bmp_from_memory(renderer, white_pawn_bmp,   white_pawn_bmp_len);
-    sdl_piece_textures.black_king   = sdl_load_bmp_from_memory(renderer, black_king_bmp,   black_king_bmp_len);
-    sdl_piece_textures.black_queen  = sdl_load_bmp_from_memory(renderer, black_queen_bmp,  black_queen_bmp_len);
-    sdl_piece_textures.black_rook   = sdl_load_bmp_from_memory(renderer, black_rook_bmp,   black_rook_bmp_len);
-    sdl_piece_textures.black_bishop = sdl_load_bmp_from_memory(renderer, black_bishop_bmp, black_bishop_bmp_len);
-    sdl_piece_textures.black_knight = sdl_load_bmp_from_memory(renderer, black_knight_bmp, black_knight_bmp_len);
-    sdl_piece_textures.black_pawn   = sdl_load_bmp_from_memory(renderer, black_pawn_bmp,   black_pawn_bmp_len);
+    sdl_piece_textures.white_king   = sdl_load_svg_from_memory(renderer, wK_svg, wK_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.white_queen  = sdl_load_svg_from_memory(renderer, wQ_svg, wQ_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.white_rook   = sdl_load_svg_from_memory(renderer, wR_svg, wR_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.white_bishop = sdl_load_svg_from_memory(renderer, wB_svg, wB_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.white_knight = sdl_load_svg_from_memory(renderer, wN_svg, wN_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.white_pawn   = sdl_load_svg_from_memory(renderer, wP_svg, wP_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.black_king   = sdl_load_svg_from_memory(renderer, bK_svg, bK_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.black_queen  = sdl_load_svg_from_memory(renderer, bQ_svg, bQ_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.black_rook   = sdl_load_svg_from_memory(renderer, bR_svg, bR_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.black_bishop = sdl_load_svg_from_memory(renderer, bB_svg, bB_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.black_knight = sdl_load_svg_from_memory(renderer, bN_svg, bN_svg_len, SVG_RENDER_SIZE);
+    sdl_piece_textures.black_pawn   = sdl_load_svg_from_memory(renderer, bP_svg, bP_svg_len, SVG_RENDER_SIZE);
 
     if (!sdl_piece_textures.white_king   || !sdl_piece_textures.white_queen  ||
         !sdl_piece_textures.white_rook   || !sdl_piece_textures.white_bishop ||
@@ -119,7 +113,7 @@ static int sdl_load_chess_pieces(SDL_Renderer *renderer) {
         !sdl_piece_textures.black_king   || !sdl_piece_textures.black_queen  ||
         !sdl_piece_textures.black_rook   || !sdl_piece_textures.black_bishop ||
         !sdl_piece_textures.black_knight || !sdl_piece_textures.black_pawn) {
-        fprintf(stderr, "Failed to load one or more piece sprites\n");
+        fprintf(stderr, "Failed to load one or more piece SVGs\n");
         return -1;
     }
     return 0;
@@ -149,7 +143,6 @@ static SDL_Texture *sdl_get_piece_texture(PieceType type, ChessColor color) {
     }
 }
 
-/* Draw a piece texture centered at (cx, cy), scaled to size×size */
 static void sdl_draw_piece(SDL_Renderer *renderer, SDL_Texture *tex,
                             int cx, int cy, int size) {
     if (!tex) return;
@@ -175,17 +168,13 @@ static void sdl_destroy_chess_pieces(void) {
  * Splash screen — JPEG via stb_image
  * ============================================================================ */
 
-#include "splashscreen.h"   /* splashscreen_jpg[] and splashscreen_jpg_len */
+#include "splashscreen.h"
 
-/*
- * Show the splash screen and wait for a keypress, click, or 10-second timeout.
- * Call after SDL_Init and renderer creation, before the main loop.
- */
 static void sdl_show_splashscreen(SDL_Renderer *renderer, int logical_w, int logical_h) {
     int width, height, channels;
     unsigned char *pixels = stbi_load_from_memory(
         splashscreen_jpg, (int)splashscreen_jpg_len,
-        &width, &height, &channels, 4);  /* force RGBA */
+        &width, &height, &channels, 4);
 
     if (!pixels) {
         fprintf(stderr, "Warning: could not decode splash screen\n");
@@ -197,17 +186,12 @@ static void sdl_show_splashscreen(SDL_Renderer *renderer, int logical_w, int log
                                           SDL_PIXELFORMAT_RGBA32,
                                           SDL_TEXTUREACCESS_STATIC,
                                           width, height);
-    if (!tex) {
-        stbi_image_free(pixels);
-        SDL_Delay(500);
-        return;
-    }
+    if (!tex) { stbi_image_free(pixels); SDL_Delay(500); return; }
 
     SDL_UpdateTexture(tex, NULL, pixels, width * 4);
     stbi_image_free(pixels);
     SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_NONE);
 
-    /* Centre the image in the logical resolution */
     SDL_Rect dst;
     dst.w = width  < logical_w ? width  : logical_w;
     dst.h = height < logical_h ? height : logical_h;
@@ -220,16 +204,13 @@ static void sdl_show_splashscreen(SDL_Renderer *renderer, int logical_w, int log
     SDL_RenderPresent(renderer);
     SDL_DestroyTexture(tex);
 
-    /* Wait up to 10 seconds for keypress or click */
     Uint32 deadline = SDL_GetTicks() + 10000;
     SDL_Event ev;
     while (SDL_GetTicks() < deadline) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_KEYDOWN ||
                 ev.type == SDL_MOUSEBUTTONDOWN ||
-                ev.type == SDL_QUIT) {
-                return;
-            }
+                ev.type == SDL_QUIT) return;
         }
         SDL_Delay(10);
     }
