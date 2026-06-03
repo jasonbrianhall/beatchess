@@ -2,7 +2,7 @@
 #define VISUALIZATION_H
 
 #include <stdbool.h>
-#ifndef MSDOS
+#if !defined(MSDOS) && !defined(SDL_BUILD)
 #include <gtk/gtk.h>
 #include <cairo.h>
 #endif
@@ -42,7 +42,7 @@ void chess_stop_thinking(ChessThinkingState *ts);
 void chess_cleanup_thinking_state(ChessThinkingState *ts);
 void* chess_think_continuously(void* arg);
 
-#ifndef MSDOS
+#if !defined(MSDOS) && !defined(SDL_BUILD)
 void draw_piece(cairo_t *cr, PieceType type, ChessColor color, double x, double y, double size, double dance_offset);
 void draw_chess_flip_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height);
 void draw_chess_undo_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height);

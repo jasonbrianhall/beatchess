@@ -95,17 +95,6 @@ static void sdl_draw_rect(SDL_Renderer *r, int x, int y, int w, int h,
     SDL_RenderDrawRect(r, &rc);
 }
 
-/* Draw a filled circle */
-static void sdl_fill_circle(SDL_Renderer *r, int cx, int cy, int radius,
-                              Uint8 R, Uint8 G, Uint8 B, Uint8 A) {
-    SDL_SetRenderDrawBlendMode(r, A < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(r, R, G, B, A);
-    for (int dy = -radius; dy <= radius; dy++) {
-        int dx = (int)sqrt((double)(radius * radius - dy * dy));
-        SDL_RenderDrawLine(r, cx - dx, cy + dy, cx + dx, cy + dy);
-    }
-}
-
 /* ============================================================================
  * Text rendering via SDL_ttf
  * ============================================================================ */
@@ -393,6 +382,7 @@ typedef struct {
     bool  ai_thinking;
     int   ai_delay_frames;
     int   ai_frame_counter;
+    float time_thinking;
 
     /* Input */
     int  mouse_x, mouse_y;
@@ -456,6 +446,7 @@ static void game_new(App *app) {
     app->move_start_ms   = SDL_GetTicks();
     app->ai_thinking     = false;
     app->ai_frame_counter = 0;
+    app->time_thinking   = 0.0f;
     app->game.turn   = WHITE;
     snprintf(app->status, sizeof(app->status), "New game — White to move");
 
@@ -1169,20 +1160,34 @@ static void update_ai(App *app, float dt) {
 
     app->ai_thinking = is_thinking || has_move;
 
-    /* Wait at least a brief moment and minimum depth before playing */
+    /* Accumulate thinking time */
+    if (is_thinking || has_move)
+        app->time_thinking += dt;
+
     if (!has_move) return;
-    app->ai_frame_counter++;
-    if (app->ai_frame_counter < app->ai_delay_frames) return;
-    if (depth < 2 && app->ai_frame_counter < app->ai_delay_frames * 3) return;
+
+    /* Mirror GTK auto-play logic:
+     * - Hard timeout after 4 seconds
+     * - Play immediately at depth >= 3
+     * - Min think time of 0.5s before playing at any depth */
+    bool should_play = false;
+    if (app->time_thinking >= 4.0f) {
+        should_play = true;
+    } else if (app->time_thinking >= 0.5f && depth >= 3) {
+        should_play = true;
+    } else if (app->time_thinking >= 0.5f && depth >= 2) {
+        should_play = true;
+    }
+    if (!should_play) return;
 
     /* Get and execute move */
     ChessMove mv = chess_get_best_move_now(&app->thinking);
+    app->time_thinking = 0;
 
     if (!chess_is_valid_move(&app->game,
                              mv.from_row, mv.from_col,
                              mv.to_row,   mv.to_col)) {
         chess_start_thinking(&app->thinking, &app->game);
-        app->ai_frame_counter = 0;
         return;
     }
 
@@ -1190,13 +1195,11 @@ static void update_ai(App *app, float dt) {
     chess_make_move(&tmp, mv);
     if (chess_is_in_check(&tmp, app->game.turn)) {
         chess_start_thinking(&app->thinking, &app->game);
-        app->ai_frame_counter = 0;
         return;
     }
 
     commit_move(app, mv.from_row, mv.from_col, mv.to_row, mv.to_col);
-    app->ai_thinking     = false;
-    app->ai_frame_counter = 0;
+    app->ai_thinking = false;
 }
 
 /* ============================================================================

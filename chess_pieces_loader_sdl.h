@@ -192,9 +192,13 @@ static void sdl_show_splashscreen(SDL_Renderer *renderer, int logical_w, int log
     stbi_image_free(pixels);
     SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_NONE);
 
+    /* Scale to fit while preserving aspect ratio */
+    float scale = (float)logical_w / width;
+    if ((int)(height * scale) > logical_h)
+        scale = (float)logical_h / height;
     SDL_Rect dst;
-    dst.w = width  < logical_w ? width  : logical_w;
-    dst.h = height < logical_h ? height : logical_h;
+    dst.w = (int)(width  * scale);
+    dst.h = (int)(height * scale);
     dst.x = (logical_w - dst.w) / 2;
     dst.y = (logical_h - dst.h) / 2;
 
@@ -204,7 +208,8 @@ static void sdl_show_splashscreen(SDL_Renderer *renderer, int logical_w, int log
     SDL_RenderPresent(renderer);
     SDL_DestroyTexture(tex);
 
-    Uint32 deadline = SDL_GetTicks() + 10000;
+    /* Wait up to 10s — SDL_Delay(16) keeps CPU idle between polls */
+    Uint32 deadline = SDL_GetTicks() + 1500;
     SDL_Event ev;
     while (SDL_GetTicks() < deadline) {
         while (SDL_PollEvent(&ev)) {
@@ -212,7 +217,7 @@ static void sdl_show_splashscreen(SDL_Renderer *renderer, int logical_w, int log
                 ev.type == SDL_MOUSEBUTTONDOWN ||
                 ev.type == SDL_QUIT) return;
         }
-        SDL_Delay(10);
+        SDL_Delay(16);
     }
 }
 
