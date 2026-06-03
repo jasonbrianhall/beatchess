@@ -1170,12 +1170,14 @@ static void update_ai(App *app, float dt) {
      * - Hard timeout after 4 seconds
      * - Play immediately at depth >= 3
      * - Min think time of 0.5s before playing at any depth */
+    /* Mirror GTK logic exactly:
+     * - min 0.5s think time
+     * - play at depth >= 3 (MAX_CHESS_DEPTH is 4)
+     * - hard timeout at 4s */
     bool should_play = false;
     if (app->time_thinking >= 4.0f) {
         should_play = true;
     } else if (app->time_thinking >= 0.5f && depth >= 3) {
-        should_play = true;
-    } else if (app->time_thinking >= 0.5f && depth >= 2) {
         should_play = true;
     }
     if (!should_play) return;
