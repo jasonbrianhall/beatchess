@@ -562,8 +562,8 @@ static void commit_move(App *app, int fr, int fc, int tr, int tc) {
     /* Check pawn promotion before animation */
     ChessPiece moving = app->game.board[fr][fc];
     bool is_promo = (moving.type == PAWN &&
-                     ((moving.color == WHITE && tr == 7) ||
-                      (moving.color == BLACK && tr == 0)));
+                     ((moving.color == WHITE && tr == 0) ||
+                      (moving.color == BLACK && tr == 7)));
 
     /* Check capture before the board is modified */
     bool was_capture = (app->game.board[tr][tc].type != EMPTY);
