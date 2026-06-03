@@ -974,37 +974,56 @@ static void draw_panel(App *app) {
 
 static void draw_menubar(App *app) {
     SDL_Renderer *r = app->renderer;
+    int item_h = (int)(22 * g_scale);
+    int sep_h  = (int)(2  * g_scale);
+    int dw     = (int)(180 * g_scale);   /* dropdown width */
+    int mx1    = 0;                       /* File menu x */
+    int mx2    = (int)(60  * g_scale);   /* Help menu x */
+    int mw     = (int)(60  * g_scale);   /* each menu button width */
+
+    /* Menubar background */
     sdl_fill_rect(r, 0, 0, LOGICAL_W, MENU_H, 28, 28, 36, 255);
 
-    bool fhov = (app->mouse_x < (int)(60*g_scale) && app->mouse_y < MENU_H);
-    if (fhov || app->file_menu_open) sdl_fill_rect(r, 0, 0, (int)(60*g_scale), MENU_H, 55, 55, 70, 255);
-    render_text(r, g_font_sm, "File", (int)(6*g_scale), (int)(4*g_scale), 210, 210, 210);
+    /* File button */
+    bool fhov = (app->mouse_x >= mx1 && app->mouse_x < mx1+mw && app->mouse_y < MENU_H);
+    if (fhov || app->file_menu_open) sdl_fill_rect(r, mx1, 0, mw, MENU_H, 55, 55, 70, 255);
+    render_text(r, g_font_sm, "File", mx1 + (int)(6*g_scale), (int)(4*g_scale), 210, 210, 210);
 
-    bool hhov = (app->mouse_x >= (int)(60*g_scale) && app->mouse_x < (int)(120*g_scale) && app->mouse_y < MENU_H);
-    if (hhov || app->help_menu_open) sdl_fill_rect(r, (int)(60*g_scale), 0, (int)(60*g_scale), MENU_H, 55, 55, 70, 255);
-    render_text(r, g_font_sm, "Help", (int)(66*g_scale), (int)(4*g_scale), 210, 210, 210);
+    /* Help button */
+    bool hhov = (app->mouse_x >= mx2 && app->mouse_x < mx2+mw && app->mouse_y < MENU_H);
+    if (hhov || app->help_menu_open) sdl_fill_rect(r, mx2, 0, mw, MENU_H, 55, 55, 70, 255);
+    render_text(r, g_font_sm, "Help", mx2 + (int)(6*g_scale), (int)(4*g_scale), 210, 210, 210);
 
-    render_text_centered(r, g_font_sm, "BeatChess SDL2 Edition", LOGICAL_W/2, 4, 255, 220, 60);
+    /* Title */
+    render_text_centered(r, g_font_sm, "BeatChess SDL2 Edition", LOGICAL_W/2, (int)(4*g_scale), 255, 220, 60);
 
+    /* File dropdown */
     if (app->file_menu_open) {
         const char *items[] = {"New Game (N)","Undo (U)","---","Save Game","Load Game","---","Quit (Q)"};
         int iy = MENU_H;
         for (int i = 0; i < 7; i++) {
-            if (items[i][0] == '-') { sdl_fill_rect(r,0,iy,180,1,70,70,90,255); iy+=2; continue; }
-            bool h = (app->mouse_x<180 && app->mouse_y>=iy && app->mouse_y<iy+22);
-            sdl_fill_rect(r,0,iy,(int)(180*g_scale),(int)(22*g_scale),h?55:35,h?55:35,h?70:45,255);
-            render_text(r,g_font_sm,items[i],(int)(8*g_scale),iy+(int)(4*g_scale),210,210,210);
-            iy+=22;
+            if (items[i][0] == '-') {
+                sdl_fill_rect(r, mx1, iy, dw, sep_h, 70, 70, 90, 255);
+                iy += sep_h; continue;
+            }
+            bool h = (app->mouse_x >= mx1 && app->mouse_x < mx1+dw &&
+                      app->mouse_y >= iy && app->mouse_y < iy+item_h);
+            sdl_fill_rect(r, mx1, iy, dw, item_h, h?55:35, h?55:35, h?70:45, 255);
+            render_text(r, g_font_sm, items[i], mx1+(int)(8*g_scale), iy+(int)(4*g_scale), 210, 210, 210);
+            iy += item_h;
         }
     }
+
+    /* Help dropdown */
     if (app->help_menu_open) {
         const char *items[] = {"Help (?)","About"};
         int iy = MENU_H;
         for (int i = 0; i < 2; i++) {
-            bool h = (app->mouse_x>=60&&app->mouse_x<240&&app->mouse_y>=iy&&app->mouse_y<iy+22);
-            sdl_fill_rect(r,(int)(60*g_scale),iy,(int)(180*g_scale),(int)(22*g_scale),h?55:35,h?55:35,h?70:45,255);
-            render_text(r,g_font_sm,items[i],(int)(68*g_scale),iy+(int)(4*g_scale),210,210,210);
-            iy+=22;
+            bool h = (app->mouse_x >= mx2 && app->mouse_x < mx2+dw &&
+                      app->mouse_y >= iy && app->mouse_y < iy+item_h);
+            sdl_fill_rect(r, mx2, iy, dw, item_h, h?55:35, h?55:35, h?70:45, 255);
+            render_text(r, g_font_sm, items[i], mx2+(int)(6*g_scale), iy+(int)(4*g_scale), 210, 210, 210);
+            iy += item_h;
         }
     }
 }
@@ -1283,12 +1302,14 @@ static void handle_board_click(App *app, int px, int py) {
 
 static void handle_menu_click(App *app, int px, int py) {
     if (py < MENU_H) {
-        if (px < (int)(60*g_scale)) { app->file_menu_open=!app->file_menu_open; app->help_menu_open=false; return; }
-        if (px < (int)(120*g_scale)){ app->help_menu_open=!app->help_menu_open; app->file_menu_open=false; return; }
+        { int mw=(int)(60*g_scale);
+        if (px < mw) { app->file_menu_open=!app->file_menu_open; app->help_menu_open=false; return; }
+        if (px < mw*2){ app->help_menu_open=!app->help_menu_open; app->file_menu_open=false; return; } }
         app->file_menu_open=app->help_menu_open=false; return;
     }
-    if (app->file_menu_open && px < (int)(180*g_scale)) {
-        int ihs[]={(int)(22*g_scale),(int)(22*g_scale),(int)(2*g_scale),(int)(22*g_scale),(int)(22*g_scale),(int)(2*g_scale),(int)(22*g_scale)}; int iy=MENU_H;
+    if (app->file_menu_open && px < (int)(180*g_scale)) {  /* file dropdown */
+        int _ih=(int)(22*g_scale),_s=(int)(2*g_scale);
+        int ihs[]={_ih,_ih,_s,_ih,_ih,_s,_ih};  /* scaled heights */ int iy=MENU_H;
         for (int i=0;i<7;i++){
             if (py>=iy && py<iy+ihs[i]) {
                 app->file_menu_open=false;
@@ -1305,7 +1326,7 @@ static void handle_menu_click(App *app, int px, int py) {
         }
         app->file_menu_open=false; return;
     }
-    if (app->help_menu_open && px>=(int)(60*g_scale) && px<(int)(240*g_scale)) {
+    if (app->help_menu_open && px>=(int)(60*g_scale) && px<(int)(60*g_scale)+(int)(180*g_scale)) {
         int iy=MENU_H;
         for (int i=0;i<2;i++){
             if (py>=iy&&py<iy+22){app->help_menu_open=false;if(i==0)app->screen=SCREEN_HELP;else app->screen=SCREEN_ABOUT;return;}
