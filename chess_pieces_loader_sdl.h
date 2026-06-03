@@ -68,8 +68,8 @@ static SDL_Texture *sdl_load_bmp_from_memory(SDL_Renderer *renderer,
             unsigned char b = src[col*3 + 0];
             unsigned char g = src[col*3 + 1];
             unsigned char r = src[col*3 + 2];
-            /* Exact pure-green mask: (0,255,0) only — matches Allegro mask color */
-            if (r == 0 && g == 255 && b == 0) {
+            /* Transparent: r==0, b==0, any green value (antialiased mask) */
+            if (r == 0 && b == 0 && g > 0) {
                 dst[col] = 0x00000000;  /* fully transparent */
             } else {
                 dst[col] = (0xFF << 24) | (r << 16) | (g << 8) | b;
