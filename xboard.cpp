@@ -7,6 +7,8 @@
 
 #include "xboard_engine.h"
 
+#include <SDL2/SDL.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -175,6 +177,7 @@ static void *reader_thread_fn(void *arg) {
         if (mv_token) {
             ChessMove mv;
             if (xboard_parse_move(mv_token, &mv)) {
+                SDL_Log("[engine] move: %s", mv_token);
                 pthread_mutex_lock(&eng->lock);
                 eng->best_move = mv;
                 eng->has_move  = true;
@@ -182,6 +185,16 @@ static void *reader_thread_fn(void *arg) {
                 pthread_cond_signal(&eng->cond);
                 pthread_mutex_unlock(&eng->lock);
             }
+        } else {
+            /* Log thinking lines: XBoard thinking output starts with a
+             * numeric depth field, e.g. " 4  +42  12  98234  e2e4 e7e5 ..."
+             * Also log any other non-empty line for visibility. */
+            char *p = line;
+            while (*p == ' ') p++;
+            if (*p >= '0' && *p <= '9')
+                SDL_Log("[engine thinking] %s", line);
+            else
+                SDL_Log("[engine] %s", line);
         }
         /* Parse engine name from protover 2 handshake:
          *   feature myname="GNU Chess 6.2.9"
@@ -273,6 +286,7 @@ bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
     /* XBoard handshake */
     engine_send(eng, "xboard");
     engine_send(eng, "protover 2");
+    engine_send(eng, "post");            /* enable thinking output           */
     /* Tell the engine not to use time controls — we drive it manually */
     engine_send(eng, "level 0 5 0");
     engine_send(eng, "sd " XBOARD_DEFAULT_DEPTH_STR);
