@@ -317,7 +317,8 @@ static void btn_draw(SDL_Renderer *r, const Button *b, bool hover, bool active,
  * ============================================================================ */
 
 typedef enum {
-    SCREEN_GAME, SCREEN_HELP, SCREEN_ABOUT, SCREEN_SAVE, SCREEN_LOAD
+    SCREEN_GAME, SCREEN_HELP, SCREEN_ABOUT, SCREEN_SAVE, SCREEN_LOAD,
+    SCREEN_ENGINE_SELECT
 } Screen;
 
 typedef struct {
@@ -405,6 +406,11 @@ typedef struct {
     bool file_menu_open;
     bool help_menu_open;
     bool confirm_new_game;  /* showing "are you sure?" dialog */
+
+    /* Engine selection */
+    int  engine_sel_white;   /* index into ENGINE_LIST */
+    int  engine_sel_black;
+    int  engine_time_limit_ms;  /* 0 = unlimited/fixed depth, else per-side ms */
 
     bool running;
 } App;
@@ -532,6 +538,53 @@ static void start_ai_thinking(App *app) {
         xboard_start_thinking(eng, &app->game);
     else
         chess_start_thinking(&app->thinking, &app->game);
+}
+
+/* ============================================================================
+ * Engine whitelist
+ * ============================================================================ */
+
+typedef struct {
+    const char *name;   /* display name */
+    const char *cmd;    /* shell command, NULL = built-in BeatChess */
+} EngineEntry;
+
+static const EngineEntry ENGINE_LIST[] = {
+    { "BeatChess",  NULL                  },
+    { "GNU Chess",  "gnuchess --xboard"   },
+    { "Stockfish",  "stockfish"           },
+    { "Crafty",     "crafty"              },
+};
+static const int ENGINE_COUNT = 4;
+
+static void game_new(App *app);  /* forward decl — defined below */
+
+/* Shut down existing engines and start the selected ones. */
+static void apply_engine_selection(App *app) {
+    if (app->use_white_xboard) { xboard_engine_quit(&app->white_engine); app->use_white_xboard = false; }
+    if (app->use_black_xboard) { xboard_engine_quit(&app->black_engine); app->use_black_xboard = false; }
+
+    const char *wcmd = ENGINE_LIST[app->engine_sel_white].cmd;
+    const char *bcmd = ENGINE_LIST[app->engine_sel_black].cmd;
+
+    if (wcmd) {
+        if (xboard_engine_init(&app->white_engine, wcmd)) {
+            app->use_white_xboard = true;
+            if (app->engine_time_limit_ms > 0)
+                xboard_engine_set_time(&app->white_engine, app->engine_time_limit_ms);
+        } else {
+            fprintf(stderr, "White engine unavailable (%s), using BeatChess\n", wcmd);
+        }
+    }
+    if (bcmd) {
+        if (xboard_engine_init(&app->black_engine, bcmd)) {
+            app->use_black_xboard = true;
+            if (app->engine_time_limit_ms > 0)
+                xboard_engine_set_time(&app->black_engine, app->engine_time_limit_ms);
+        } else {
+            fprintf(stderr, "Black engine unavailable (%s), using BeatChess\n", bcmd);
+        }
+    }
 }
 
 static void game_new(App *app) {
@@ -999,20 +1052,20 @@ static void draw_panel(App *app) {
         {x, y+28,   PANEL_W, 24, "U - Undo",            0, !game_over},
         {x, y+56,   PANEL_W, 24, "R - Resign",          0, !game_over && app->player_vs_ai},
         {x, y+84,   PANEL_W, 24, app->player_vs_ai ? "A - AI vs AI Mode" : "A - Player vs AI Mode", 0, true},
-        {x, y+112,  PANEL_W, 24, "B - Swap Color",      0, true},
-        {x, y+140,  PANEL_W, 24, "F - Flip Board",      0, true},
-        {x, y+168,  PANEL_W, 24, g_sound_on ? "M - Sound: ON" : "M - Sound: OFF", 0, true},
-        {x, y+196,  PANEL_W, 24, "? - Help",            0, true},
-        {x, y+224,  PANEL_W, 24, "Q - Quit",            0, true},
+        {x, y+112,  PANEL_W, 24, "E - Engines",         0, true},
+        {x, y+140,  PANEL_W, 24, "B - Swap Color",      0, true},
+        {x, y+168,  PANEL_W, 24, "F - Flip Board",      0, true},
+        {x, y+196,  PANEL_W, 24, g_sound_on ? "M - Sound: ON" : "M - Sound: OFF", 0, true},
+        {x, y+224,  PANEL_W, 24, "? - Help",            0, true},
+        {x, y+252,  PANEL_W, 24, "Q - Quit",            0, true},
     };
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 10; i++) {
         if (!btns[i].enabled) continue;
         bool hov = btn_hovered(&btns[i], app->mouse_x, app->mouse_y);
-        /* Resign button is red-tinted */
         if (i == 2) btn_draw(r, &btns[i], hov, false, 65, 30, 30);
         else        btn_draw(r, &btns[i], hov, false);
     }
-    y += 256;
+    y += 284;
 
     /* Captured pieces — pinned to bottom of panel, always visible */
     {
@@ -1131,7 +1184,7 @@ static void draw_help_screen(App *app) {
         "R          Resign",
         "A          Toggle AI vs AI / Player vs AI",
         "B          Swap player colour",
-        "F          Flip board",
+        "E          Select chess engines",
         "M          Toggle sound on/off",
         "?          Show this help",
         "Q / Esc    Quit",
@@ -1158,6 +1211,149 @@ static void draw_about_screen(App *app) {
     render_text_centered(r,g_font_sm,"Copyright (c) 2025 Jason Brian Hall",LOGICAL_W/2,y,160,200,230); y+=(int)(25*g_scale);
     render_text_centered(r,g_font_sm,"MIT License",LOGICAL_W/2,y,100,200,100); y+=(int)(40*g_scale);
     render_text_centered(r,g_font_sm,"Press any key or click to return.",LOGICAL_W/2,y,140,140,160);
+}
+
+static void draw_file_dialog(App *app, bool is_save);  /* forward decl */
+
+/* Time presets: label + milliseconds (0 = unlimited) */
+typedef struct { const char *label; int ms; } TimePreset;
+static const TimePreset TIME_PRESETS[] = {
+    { "Unlimited", 0       },
+    { "1 min",     60000   },
+    { "3 min",     180000  },
+    { "5 min",     300000  },
+    { "10 min",    600000  },
+    { "15 min",    900000  },
+};
+static const int TIME_PRESET_COUNT = 6;
+
+static void draw_engine_select(App *app) {
+    SDL_Renderer *r = app->renderer;
+    sdl_fill_rect(r, 0, 0, LOGICAL_W, LOGICAL_H, 15, 15, 20, 240);
+
+    int cx = LOGICAL_W / 2;
+    int y  = (int)(30 * g_scale);
+    render_text_centered(r, g_font_lg, "Engine Selection", cx, y, 255, 220, 60);
+    y += (int)(44 * g_scale);
+
+    /* --- Engine rows side by side --- */
+    const char *sides[] = { "White Engine", "Black Engine" };
+    int *sels[]         = { &app->engine_sel_white, &app->engine_sel_black };
+    int col_w = LOGICAL_W / 2 - (int)(20 * g_scale);
+    int col_xs[] = { (int)(20 * g_scale), LOGICAL_W / 2 + (int)(10 * g_scale) };
+    int bw = col_w, bh = (int)(26 * g_scale);
+
+    int engine_block_y = y;
+    for (int s = 0; s < 2; s++) {
+        int ey = engine_block_y;
+        int ex = col_xs[s];
+        render_text_centered(r, g_font_med, sides[s], ex + col_w/2, ey, 200, 200, 220);
+        ey += (int)(26 * g_scale);
+        for (int i = 0; i < ENGINE_COUNT; i++) {
+            bool selected = (*sels[s] == i);
+            bool hov = (app->mouse_x >= ex && app->mouse_x < ex+bw &&
+                        app->mouse_y >= ey && app->mouse_y < ey+bh);
+            Uint8 br = selected ? 60  : hov ? 55 : 35;
+            Uint8 bg = selected ? 100 : hov ? 55 : 35;
+            Uint8 bb = selected ? 160 : hov ? 70 : 45;
+            sdl_fill_rect(r, ex, ey, bw, bh, br, bg, bb, 255);
+            sdl_draw_rect(r, ex, ey, bw, bh,
+                          selected ? 100 : 70, selected ? 160 : 70, selected ? 255 : 90, 255);
+            render_text_centered(r, g_font_sm, ENGINE_LIST[i].name,
+                                 ex + col_w/2, ey + (bh - FONT_SM) / 2, 220, 220, 220);
+            ey += bh + (int)(4 * g_scale);
+        }
+    }
+    y = engine_block_y + (int)(26 * g_scale)
+        + ENGINE_COUNT * (bh + (int)(4 * g_scale))
+        + (int)(18 * g_scale);
+
+    /* --- Max Time block --- */
+    sdl_fill_rect(r, (int)(16*g_scale), y - (int)(4*g_scale),
+                  LOGICAL_W - (int)(32*g_scale), (int)(2*g_scale), 50, 50, 70, 255);
+    render_text_centered(r, g_font_med, "Max Time per Side", cx, y, 200, 200, 220);
+    y += (int)(28 * g_scale);
+
+    int tw = (int)(110 * g_scale), th = (int)(26 * g_scale);
+    int tper = 3;  /* presets per row */
+    for (int i = 0; i < TIME_PRESET_COUNT; i++) {
+        int col  = i % tper;
+        int row  = i / tper;
+        int total_row_w = tper * tw + (tper-1) * (int)(6*g_scale);
+        int tx = cx - total_row_w/2 + col * (tw + (int)(6*g_scale));
+        int ty = y + row * (th + (int)(4*g_scale));
+        bool selected = (app->engine_time_limit_ms == TIME_PRESETS[i].ms);
+        bool hov = (app->mouse_x >= tx && app->mouse_x < tx+tw &&
+                    app->mouse_y >= ty && app->mouse_y < ty+th);
+        Uint8 br = selected ? 100 : hov ? 55 : 35;
+        Uint8 bg = selected ? 70  : hov ? 55 : 35;
+        Uint8 bb = selected ? 30  : hov ? 45 : 45;
+        sdl_fill_rect(r, tx, ty, tw, th, br, bg, bb, 255);
+        sdl_draw_rect(r, tx, ty, tw, th,
+                      selected ? 220 : 70, selected ? 140 : 70, selected ? 40 : 70, 255);
+        render_text_centered(r, g_font_sm, TIME_PRESETS[i].label,
+                             tx + tw/2, ty + (th - FONT_SM)/2, 220, 220, 220);
+    }
+    int time_rows = (TIME_PRESET_COUNT + tper - 1) / tper;
+    y += time_rows * (th + (int)(4*g_scale)) + (int)(18*g_scale);
+
+    /* --- Apply button --- */
+    int abw = (int)(160 * g_scale), abh = (int)(30 * g_scale);
+    int abx = cx - abw / 2;
+    bool ahov = (app->mouse_x >= abx && app->mouse_x < abx+abw &&
+                 app->mouse_y >= y   && app->mouse_y < y+abh);
+    sdl_fill_rect(r, abx, y, abw, abh, ahov?50:30, ahov?90:60, ahov?50:30, 255);
+    sdl_draw_rect(r, abx, y, abw, abh, 80, 160, 80, 255);
+    render_text_centered(r, g_font_sm, "Apply & New Game", cx, y + (abh - FONT_SM)/2, 200, 255, 200);
+    y += abh + (int)(10*g_scale);
+    render_text_centered(r, g_font_sm, "Enter - Apply    Esc - Cancel", cx, y, 120, 120, 140);
+}
+
+static void handle_engine_select_click(App *app, int px, int py) {
+    int cx = LOGICAL_W / 2;
+    int bh = (int)(26 * g_scale);
+    int col_w = LOGICAL_W / 2 - (int)(20 * g_scale);
+    int col_xs[] = { (int)(20 * g_scale), LOGICAL_W / 2 + (int)(10 * g_scale) };
+    int *sels[] = { &app->engine_sel_white, &app->engine_sel_black };
+
+    int engine_block_y = (int)(30 * g_scale) + (int)(44 * g_scale);
+
+    /* Engine buttons */
+    for (int s = 0; s < 2; s++) {
+        int ey = engine_block_y + (int)(26 * g_scale);
+        int ex = col_xs[s];
+        for (int i = 0; i < ENGINE_COUNT; i++) {
+            if (px >= ex && px < ex+col_w && py >= ey && py < ey+bh)
+                *sels[s] = i;
+            ey += bh + (int)(4 * g_scale);
+        }
+    }
+
+    /* Time preset buttons */
+    int y = engine_block_y + (int)(26 * g_scale)
+            + ENGINE_COUNT * (bh + (int)(4 * g_scale))
+            + (int)(18 * g_scale)
+            + (int)(28 * g_scale);  /* time label */
+    int tw = (int)(110 * g_scale), th = (int)(26 * g_scale), tper = 3;
+    for (int i = 0; i < TIME_PRESET_COUNT; i++) {
+        int col = i % tper, row = i / tper;
+        int total_row_w = tper * tw + (tper-1) * (int)(6*g_scale);
+        int tx = cx - total_row_w/2 + col * (tw + (int)(6*g_scale));
+        int ty = y + row * (th + (int)(4*g_scale));
+        if (px >= tx && px < tx+tw && py >= ty && py < ty+th)
+            app->engine_time_limit_ms = TIME_PRESETS[i].ms;
+    }
+    int time_rows = (TIME_PRESET_COUNT + tper - 1) / tper;
+    y += time_rows * (th + (int)(4*g_scale)) + (int)(18*g_scale);
+
+    /* Apply button */
+    int abw = (int)(160 * g_scale), abh = (int)(30 * g_scale);
+    int abx = cx - abw / 2;
+    if (px >= abx && px < abx+abw && py >= y && py < y+abh) {
+        app->screen = SCREEN_GAME;
+        apply_engine_selection(app);
+        game_new(app);
+    }
 }
 
 static void draw_file_dialog(App *app, bool is_save) {
@@ -1211,7 +1407,8 @@ static void draw_frame(App *app) {
     sdl_fill_rect(r,0,0,LOGICAL_W,LOGICAL_H,20,20,25,255);
     switch (app->screen) {
         case SCREEN_HELP:  draw_help_screen(app);        break;
-        case SCREEN_ABOUT: draw_about_screen(app);       break;
+        case SCREEN_ABOUT:          draw_about_screen(app);          break;
+        case SCREEN_ENGINE_SELECT:  draw_engine_select(app);         break;
         case SCREEN_SAVE:  draw_file_dialog(app,true);   break;
         case SCREEN_LOAD:  draw_file_dialog(app,false);  break;
         case SCREEN_GAME:
@@ -1249,8 +1446,8 @@ static void handle_game_key(App *app, SDL_Keycode key) {
             app->player_is_white = !app->player_is_white;
             game_new(app);
             break;
-        case SDLK_f:
-            app->board_flipped = !app->board_flipped;
+        case SDLK_e:
+            app->screen = SCREEN_ENGINE_SELECT;
             break;
         case SDLK_m:
             audio_toggle();
@@ -1414,9 +1611,9 @@ static void handle_menu_click(App *app, int px, int py) {
     bool game_over = app->is_checkmate || app->is_stalemate || app->resigned;
     int base_y = BOARD_MARGIN_Y + MENU_H + (int)((36+20+20+26+16+22+18+8));
     if (px >= PANEL_X && px < LOGICAL_W) {
-        int bys[]={0,28,56,84,112,140,168,196,224};
-        SDL_Keycode ks[]={SDLK_n,SDLK_u,SDLK_r,SDLK_a,SDLK_b,SDLK_f,SDLK_m,SDLK_QUESTION,SDLK_q};
-        for (int i=0;i<9;i++){
+        int bys[]={0,28,56,84,112,140,168,196,224,252};
+        SDL_Keycode ks[]={SDLK_n,SDLK_u,SDLK_r,SDLK_a,SDLK_e,SDLK_b,SDLK_f,SDLK_m,SDLK_QUESTION,SDLK_q};
+        for (int i=0;i<10;i++){
             if (i==1&&game_over) continue;
             if (i==2&&(game_over||!app->player_vs_ai)) continue;
             if (py>=base_y+bys[i]&&py<base_y+bys[i]+24){handle_game_key(app,ks[i]);return;}
@@ -1722,6 +1919,10 @@ int main(int argc, char *argv[]) {
     app->player_is_white = true;
     app->screen          = SCREEN_GAME;
     app->running         = true;
+    /* Default selection indices match whatever was init'd from CLI */
+    app->engine_sel_white = app->use_white_xboard ? 1 : 0;
+    app->engine_sel_black = app->use_black_xboard ? 1 : 0;
+    app->engine_time_limit_ms = cli_time_ms;
 
     game_new(app);
 
@@ -1741,6 +1942,11 @@ int main(int argc, char *argv[]) {
                 case SDL_KEYDOWN: {
                     SDL_Keycode k=ev.key.keysym.sym;
                     if (app->screen==SCREEN_HELP||app->screen==SCREEN_ABOUT){app->screen=SCREEN_GAME;break;}
+                    if (app->screen==SCREEN_ENGINE_SELECT){
+                        if (k==SDLK_ESCAPE) { app->screen=SCREEN_GAME; break; }
+                        if (k==SDLK_RETURN) { app->screen=SCREEN_GAME; apply_engine_selection(app); game_new(app); break; }
+                        break;
+                    }
                     if (app->screen==SCREEN_SAVE){handle_dialog_key(app,k,true);break;}
                     if (app->screen==SCREEN_LOAD){handle_dialog_key(app,k,false);break;}
                     if (app->awaiting_promotion) break; /* ignore keys during promotion */
@@ -1773,6 +1979,7 @@ int main(int argc, char *argv[]) {
                         int px=ev.button.x, py=ev.button.y;
                         app->mouse_x=px; app->mouse_y=py;
                         if (app->screen==SCREEN_HELP||app->screen==SCREEN_ABOUT){app->screen=SCREEN_GAME;break;}
+                        if (app->screen==SCREEN_ENGINE_SELECT){handle_engine_select_click(app,px,py);break;}
                         if (app->screen==SCREEN_SAVE||app->screen==SCREEN_LOAD){
                             int ly=(int)(60*g_scale),lh=(int)(360*g_scale);
                             if (px>=60&&px<LOGICAL_W-60&&py>=ly&&py<ly+lh){
