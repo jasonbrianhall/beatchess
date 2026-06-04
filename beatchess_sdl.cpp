@@ -775,14 +775,12 @@ static void commit_move(App *app, int fr, int fc, int tr, int tc) {
     start_animation(app, fr, fc, tr, tc, post);
 
     if (is_promo) {
-        /* Always promote to queen — only show the dialog for human moves */
+        /* Always promote to queen; only show the dialog for human moves */
         app->post_anim_game.board[tr][tc].type = QUEEN;
-
         bool ai_is_moving = !app->player_vs_ai ||
                             (app->player_vs_ai && moving.color !=
                              (app->player_is_white ? WHITE : BLACK));
         if (!ai_is_moving) {
-            /* Human move: let the player pick a piece */
             app->awaiting_promotion = true;
             app->promo_row = tr;
             app->promo_col = tc;
@@ -909,6 +907,30 @@ static void player_resign(App *app) {
     app->resigned = true;
     const char *loser = app->player_is_white ? "White" : "Black";
     snprintf(app->status, sizeof(app->status), "%s resigns.", loser);
+    audio_play_resign();
+}
+
+static void call_flag(App *app) {
+    /* In AI vs AI mode: declare the side that has used more time the loser.
+     * If blitz engines have a time_remaining, use that; otherwise use elapsed ms. */
+    if (app->player_vs_ai) return;
+    if (app->is_checkmate || app->is_stalemate || app->resigned) return;
+
+    double white_used = app->white_ms;
+    double black_used = app->black_ms;
+
+    /* If blitz mode, prefer remaining time (lower remaining = more used) */
+    bool white_blitz = app->use_white_xboard && app->white_engine.time_limit_ms > 0;
+    bool black_blitz = app->use_black_xboard && app->black_engine.time_limit_ms > 0;
+    if (white_blitz) white_used = app->white_engine.time_limit_ms - app->white_engine.time_remaining_ms;
+    if (black_blitz) black_used = app->black_engine.time_limit_ms - app->black_engine.time_remaining_ms;
+
+    app->resigned = true;
+    if (white_used >= black_used) {
+        snprintf(app->status, sizeof(app->status), "Flag! White loses on time.");
+    } else {
+        snprintf(app->status, sizeof(app->status), "Flag! Black loses on time.");
+    }
     audio_play_resign();
 }
 
@@ -1175,7 +1197,7 @@ static void draw_panel(App *app) {
     Button btns[] = {
         {x, y,      PANEL_W, 24, "N - New Game",        0, true},
         {x, y+28,   PANEL_W, 24, "U - Undo",            0, !game_over},
-        {x, y+56,   PANEL_W, 24, "R - Resign",          0, !game_over && app->player_vs_ai},
+        {x, y+56,   PANEL_W, 24, app->player_vs_ai ? "R - Resign" : "C - Call Flag", 0, !game_over},
         {x, y+84,   PANEL_W, 24, app->player_vs_ai ? "A - AI vs AI Mode" : "A - Player vs AI Mode", 0, true},
         {x, y+112,  PANEL_W, 24, "E - Engines",         0, true},
         {x, y+140,  PANEL_W, 24, "B - Swap Color",      0, true},
@@ -1306,7 +1328,7 @@ static void draw_help_screen(App *app) {
     const char *lines[] = {
         "N          New Game",
         "U          Undo move (Player vs AI: undoes AI move too)",
-        "R          Resign",
+        "R          Resign  /  C - Call Flag (AI vs AI)",
         "A          Toggle AI vs AI / Player vs AI",
         "B          Swap player colour",
         "E          Select chess engines",
@@ -1569,7 +1591,35 @@ static void request_new_game(App *app) {
     app->confirm_new_game = true;
 }
 
+static void stop_ai_thinking(App *app) {
+    /* Cancel built-in minimax thread — don't join, chess_cleanup_thinking_state owns that */
+#if BEATCHESS_HAS_PTHREAD
+    if (app->thinking.thinking) {
+        /* AI_YIELD_IMPL() calls pthread_testcancel() in SDL builds, so
+         * deferred cancellation will fire at the next top-level move evaluation */
+        pthread_cancel(app->thinking.thread);
+    }
+#endif
+    app->thinking.thinking = false;
+    app->thinking.has_move = false;
+    app->ai_thinking       = false;
+    app->time_thinking     = 0.0f;
+
+    /* Tell xboard engines to stop searching immediately */
+    if (app->use_white_xboard && app->white_engine.engine_ok && app->white_engine.to_engine) {
+        const char *stop_cmd = (app->white_engine.protocol == ENGINE_PROTOCOL_UCI) ? "stop\n" : "?\n";
+        fprintf(app->white_engine.to_engine, "%s", stop_cmd);
+        fflush(app->white_engine.to_engine);
+    }
+    if (app->use_black_xboard && app->black_engine.engine_ok && app->black_engine.to_engine) {
+        const char *stop_cmd = (app->black_engine.protocol == ENGINE_PROTOCOL_UCI) ? "stop\n" : "?\n";
+        fprintf(app->black_engine.to_engine, "%s", stop_cmd);
+        fflush(app->black_engine.to_engine);
+    }
+}
+
 static void quit_game(App *app) {
+    stop_ai_thinking(app);
     if (app->use_white_xboard) xboard_engine_quit(&app->white_engine);
     if (app->use_black_xboard) xboard_engine_quit(&app->black_engine);
     app->use_white_xboard = false;
@@ -1582,6 +1632,7 @@ static void handle_game_key(App *app, SDL_Keycode key) {
         case SDLK_n: request_new_game(app); break;
         case SDLK_u: undo_move(app); break;
         case SDLK_r: player_resign(app); break;
+        case SDLK_c: call_flag(app); break;
         case SDLK_a:
             app->player_vs_ai = !app->player_vs_ai;
             game_new(app);
@@ -1591,6 +1642,11 @@ static void handle_game_key(App *app, SDL_Keycode key) {
             game_new(app);
             break;
         case SDLK_e:
+            if (!app->is_checkmate && !app->is_stalemate && !app->resigned) {
+                stop_ai_thinking(app);
+                if (app->use_white_xboard) { xboard_engine_quit(&app->white_engine); app->use_white_xboard = false; }
+                if (app->use_black_xboard) { xboard_engine_quit(&app->black_engine); app->use_black_xboard = false; }
+            }
             app->screen = SCREEN_ENGINE_SELECT;
             break;
         case SDLK_m:
@@ -1756,10 +1812,10 @@ static void handle_menu_click(App *app, int px, int py) {
     int base_y = BOARD_MARGIN_Y + MENU_H + (int)((36+20+20+26+16+22+18+8));
     if (px >= PANEL_X && px < LOGICAL_W) {
         int bys[]={0,28,56,84,112,140,168,196,224,252};
-        SDL_Keycode ks[]={SDLK_n,SDLK_u,SDLK_r,SDLK_a,SDLK_e,SDLK_b,SDLK_f,SDLK_m,SDLK_QUESTION,SDLK_q};
+        SDL_Keycode ks[]={SDLK_n,SDLK_u,app->player_vs_ai?SDLK_r:SDLK_c,SDLK_a,SDLK_e,SDLK_b,SDLK_f,SDLK_m,SDLK_QUESTION,SDLK_q};
         for (int i=0;i<10;i++){
             if (i==1&&game_over) continue;
-            if (i==2&&(game_over||!app->player_vs_ai)) continue;
+            if (i==2&&game_over) continue;
             if (py>=base_y+bys[i]&&py<base_y+bys[i]+24){handle_game_key(app,ks[i]);return;}
         }
         return;

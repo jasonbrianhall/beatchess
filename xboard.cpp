@@ -336,14 +336,26 @@ bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
 void xboard_engine_quit(XBoardEngine *eng) {
     if (!eng->engine_ok) return;
     eng->engine_ok = false;
+
+    /* Send quit/stop so the engine exits cleanly */
     if (eng->protocol == ENGINE_PROTOCOL_UCI)
-        engine_send(eng, "quit");
-    else
-        engine_send(eng, "quit");
-    fclose(eng->to_engine);   eng->to_engine   = NULL;
-    fclose(eng->from_engine); eng->from_engine = NULL;
-    pthread_join(eng->reader_thread, NULL);
-    waitpid(eng->child_pid, NULL, 0);
+        engine_send(eng, "stop");
+    engine_send(eng, "quit");
+
+    /* Close write pipe — engine sees EOF on stdin */
+    if (eng->to_engine)   { fclose(eng->to_engine);   eng->to_engine   = NULL; }
+
+    /* Close read pipe — unblocks the reader thread's fgets() */
+    if (eng->from_engine) { fclose(eng->from_engine); eng->from_engine = NULL; }
+
+    /* Detach reader thread — we don't need to wait for it */
+    pthread_detach(eng->reader_thread);
+
+    /* Reap child without blocking — let OS clean up if it's still running */
+    waitpid(eng->child_pid, NULL, WNOHANG);
+    /* Send SIGTERM in case it didn't exit yet */
+    kill(eng->child_pid, SIGTERM);
+
     pthread_mutex_destroy(&eng->lock);
     pthread_cond_destroy(&eng->cond);
 }
@@ -392,6 +404,9 @@ bool xboard_engine_init_uci(XBoardEngine *eng, const char *engine_cmd) {
 
     /* UCI handshake — reader thread drains the responses asynchronously */
     engine_send(eng, "uci");
+    /* Constrain resource usage — important when running two instances */
+    engine_send(eng, "setoption name Threads value 1");
+    engine_send(eng, "setoption name Hash value 32");
     engine_send(eng, "isready");
     engine_send(eng, "ucinewgame");
     return true;
