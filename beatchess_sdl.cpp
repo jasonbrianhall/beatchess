@@ -11,7 +11,7 @@
  *   A        - Toggle AI vs AI / Player vs AI
  *   B        - Swap player color
  *   F        - Flip board
- *   M        - Toggle music
+ *   M        - Toggle sound
  *   R        - Resign
  *   ?        - Help
  *   Q / Esc  - Quit
@@ -241,25 +241,21 @@ static void render_text_centered(SDL_Renderer *r, TTF_Font *font, const char *te
  * Audio — uses chess_sound.cpp procedural SFX
  * ============================================================================ */
 
-static bool  g_music_on = true;
+static bool  g_sound_on = true;
 static Mix_Music *g_bg_music = NULL;
 
 static void audio_init(void) {
     chess_sound_init();
 }
 
-static void audio_play_move(void)      { chess_sound_play(SFX_MOVE); }
-static void audio_play_capture(void)   { chess_sound_play(SFX_CAPTURE); }
-static void audio_play_check(void)     { chess_sound_play(SFX_CHECK); }
-static void audio_play_checkmate(void) { chess_sound_play(SFX_CHECKMATE); }
-static void audio_play_resign(void)    { chess_sound_play(SFX_RESIGN); }
+static void audio_play_move(void)      { if (g_sound_on) chess_sound_play(SFX_MOVE); }
+static void audio_play_capture(void)   { if (g_sound_on) chess_sound_play(SFX_CAPTURE); }
+static void audio_play_check(void)     { if (g_sound_on) chess_sound_play(SFX_CHECK); }
+static void audio_play_checkmate(void) { if (g_sound_on) chess_sound_play(SFX_CHECKMATE); }
+static void audio_play_resign(void)    { if (g_sound_on) chess_sound_play(SFX_RESIGN); }
 
 static void audio_toggle(void) {
-    g_music_on = !g_music_on;
-    if (g_bg_music) {
-        if (g_music_on) Mix_PlayMusic(g_bg_music, -1);
-        else Mix_HaltMusic();
-    }
+    g_sound_on = !g_sound_on;
 }
 
 static void audio_shutdown(void) {
@@ -1005,7 +1001,7 @@ static void draw_panel(App *app) {
         {x, y+84,   PANEL_W, 24, app->player_vs_ai ? "A - AI vs AI Mode" : "A - Player vs AI Mode", 0, true},
         {x, y+112,  PANEL_W, 24, "B - Swap Color",      0, true},
         {x, y+140,  PANEL_W, 24, "F - Flip Board",      0, true},
-        {x, y+168,  PANEL_W, 24, g_music_on ? "M - Music: ON" : "M - Music: OFF", 0, true},
+        {x, y+168,  PANEL_W, 24, g_sound_on ? "M - Sound: ON" : "M - Sound: OFF", 0, true},
         {x, y+196,  PANEL_W, 24, "? - Help",            0, true},
         {x, y+224,  PANEL_W, 24, "Q - Quit",            0, true},
     };
@@ -1024,20 +1020,21 @@ static void draw_panel(App *app) {
         int cap_sz = 16;
         int cy = panel_bottom - cap_sz*2 - 18;
         render_text(r, g_font_sm, "Captured:", x, cy - 16, 140, 140, 160);
-        /* Draw black captured (white pieces taken by black) */
+        /* white_captured = black pieces taken by white — draw as BLACK */
         int cx = x;
         for (int type = PAWN; type <= QUEEN; type++) {
             for (int n = 0; n < app->white_captured[type]; n++) {
-                SDL_Texture *tex = sdl_get_piece_texture((PieceType)type, WHITE);
+                SDL_Texture *tex = sdl_get_piece_texture((PieceType)type, BLACK);
                 sdl_draw_piece(r, tex, cx + cap_sz/2, cy + cap_sz/2, cap_sz);
                 cx += cap_sz + 1;
             }
         }
         cx = x;
         cy += cap_sz + 2;
+        /* black_captured = white pieces taken by black — draw as WHITE */
         for (int type = PAWN; type <= QUEEN; type++) {
             for (int n = 0; n < app->black_captured[type]; n++) {
-                SDL_Texture *tex = sdl_get_piece_texture((PieceType)type, BLACK);
+                SDL_Texture *tex = sdl_get_piece_texture((PieceType)type, WHITE);
                 sdl_draw_piece(r, tex, cx + cap_sz/2, cy + cap_sz/2, cap_sz);
                 cx += cap_sz + 1;
             }
@@ -1135,7 +1132,7 @@ static void draw_help_screen(App *app) {
         "A          Toggle AI vs AI / Player vs AI",
         "B          Swap player colour",
         "F          Flip board",
-        "M          Toggle music on/off",
+        "M          Toggle sound on/off",
         "?          Show this help",
         "Q / Esc    Quit",
         "",
@@ -1630,7 +1627,7 @@ int main(int argc, char *argv[]) {
                 "  A    Toggle AI vs AI / Player vs AI\n"
                 "  B    Swap player colour\n"
                 "  F    Flip board\n"
-                "  M    Toggle music\n"
+                "  M    Toggle sound\n"
                 "  ?    In-game help\n"
                 "  Q    Quit\n"
             );

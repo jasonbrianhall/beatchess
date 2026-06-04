@@ -7,6 +7,8 @@
 
 #include "xboard_engine.h"
 
+#include <SDL2/SDL.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -175,7 +177,7 @@ static void *reader_thread_fn(void *arg) {
         if (mv_token) {
             ChessMove mv;
             if (xboard_parse_move(mv_token, &mv)) {
-                fprintf(stderr, "[engine] move: %s\n", mv_token);
+                SDL_Log("[engine] move: %s", mv_token);
                 pthread_mutex_lock(&eng->lock);
                 eng->best_move = mv;
                 eng->has_move  = true;
@@ -190,9 +192,9 @@ static void *reader_thread_fn(void *arg) {
             char *p = line;
             while (*p == ' ') p++;
             if (*p >= '0' && *p <= '9')
-                fprintf(stderr, "[engine thinking] %s\n", line);
+                SDL_Log("[engine thinking] %s", line);
             else
-                fprintf(stderr, "[engine] %s\n", line);
+                SDL_Log("[engine] %s", line);
         }
         /* Parse engine name from protover 2 handshake:
          *   feature myname="GNU Chess 6.2.9"
