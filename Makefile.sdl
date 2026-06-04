@@ -10,7 +10,7 @@ LDFLAGS  = $(shell pkg-config --libs sdl2 SDL2_mixer SDL2_ttf) \
 TARGET   = beatchess_sdl
 
 # SDL2 source files
-SOURCES  = beatchess_sdl.cpp beatchess.cpp chess_ai_move.cpp pgn.cpp chess_sound.cpp
+SOURCES  = beatchess_sdl.cpp beatchess.cpp chess_ai_move.cpp pgn.cpp chess_sound.cpp xboard.cpp
 OBJECTS  = $(SOURCES:.cpp=.o)
 
 .PHONY: all clean debug rebuild

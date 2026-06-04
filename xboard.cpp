@@ -1,272 +1,343 @@
 /*
- * BeatChess WINBOARD Engine - Fixed Version
- * Uses the actual chess_ai_move.cpp AI engine for move calculation
- * 
- * FIXES:
- * - Proper handling of all three game modes (WvA, BvA, AvA)
- * - Game status checking to detect checkmate/stalemate
- * - Controlled move generation without board corruption
- * - Proper "go" command implementation
+ * xboard_engine.cpp — XBoard/WinBoard protocol engine subprocess wrapper
+ *
+ * Compile alongside your other SDL sources:
+ *   g++ ... xboard_engine.cpp -lpthread
  */
+
+#include "xboard_engine.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <stdbool.h>
-#include <limits.h>
-#include <stdarg.h>
-#include "beatchess.h"
-#include "chess_ai_move.h"
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <pthread.h>
 
-typedef enum { WvA, BvA, AvA } GameMode;
+/* ============================================================================
+ * Internal helpers
+ * ============================================================================ */
 
-static int search_depth = 4;
-static FILE *debug_log = NULL;
-static GameMode game_mode = WvA;
-static bool waiting_for_go_in_ava = false;  /* For AvA mode, wait for explicit "go" */
-
-void debug_print(const char *fmt, ...) {
-    if (!debug_log) return;
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(debug_log, fmt, args);
-    va_end(args);
-    fflush(debug_log);
+/* Send a line to the engine (adds newline, flushes). */
+static void engine_send(XBoardEngine *eng, const char *line) {
+    if (!eng->engine_ok || !eng->to_engine) return;
+    fprintf(eng->to_engine, "%s\n", line);
+    fflush(eng->to_engine);
 }
 
-bool in_bounds(int r, int c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
-
-char *move_to_str(ChessMove m) {
-    static char buf[10];
-    snprintf(buf, 10, "%c%d%c%d", 'a' + m.from_col, 8 - m.from_row, 'a' + m.to_col, 8 - m.to_row);
-    return buf;
+static void engine_sendf(XBoardEngine *eng, const char *fmt, ...) {
+    if (!eng->engine_ok || !eng->to_engine) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(eng->to_engine, fmt, ap);
+    va_end(ap);
+    fprintf(eng->to_engine, "\n");
+    fflush(eng->to_engine);
 }
 
-ChessMove str_to_move(const char *str) {
-    return (ChessMove){8 - (str[1] - '0'), str[0] - 'a', 8 - (str[3] - '0'), str[2] - 'a', 0};
-}
+/* ============================================================================
+ * FEN generation
+ * ============================================================================ */
 
-/**
- * Play out an entire AvA game (AI vs AI)
- * Keeps making moves until checkmate or stalemate
- */
-void play_ava_game(ChessGameState *game, ChessAIConfig config) {
-    debug_print("[AvA] Starting AI vs AI game\n");
-    
-    int move_count = 0;
-    while (1) {
-        /* Check game status */
-        ChessGameStatus status = chess_check_game_status(game);
-        
-        if (status == CHESS_CHECKMATE_WHITE) {
-            debug_print("[AvA] Game Over: BLACK WINS (White checkmated)\n");
-            break;
-        }
-        if (status == CHESS_CHECKMATE_BLACK) {
-            debug_print("[AvA] Game Over: WHITE WINS (Black checkmated)\n");
-            break;
-        }
-        if (status == CHESS_STALEMATE) {
-            debug_print("[AvA] Game Over: STALEMATE\n");
-            break;
-        }
-        
-        /* Compute and make move */
-        debug_print("[AvA] Move %d (%s to move)\n", move_count + 1, 
-                   game->turn == WHITE ? "WHITE" : "BLACK");
-        
-        ChessAIMoveResult result = chess_ai_compute_move(game, config);
-        
-        if (result.move.from_row < 0) {
-            debug_print("[AvA] ERROR: No valid move found!\n");
-            break;
-        }
-        
-        /* Make the move internally */
-        chess_make_move(game, result.move);
-        
-        /* Output the move */
-        printf("move %s\n", move_to_str(result.move));
-        fflush(stdout);
-        
-        debug_print("[AvA] Sent: %s (score: %d)\n", move_to_str(result.move), result.score);
-        
-        move_count++;
-        
-        /* Safety check: prevent infinite loops */
-        if (move_count > 500) {
-            debug_print("[AvA] WARNING: Game exceeded 500 moves, stopping\n");
-            break;
-        }
+static char piece_to_fen_char(ChessPiece p) {
+    char c;
+    switch (p.type) {
+        case PAWN:   c = 'p'; break;
+        case KNIGHT: c = 'n'; break;
+        case BISHOP: c = 'b'; break;
+        case ROOK:   c = 'r'; break;
+        case QUEEN:  c = 'q'; break;
+        case KING:   c = 'k'; break;
+        default:     return 0;
     }
-    
-    debug_print("[AvA] Game finished after %d moves\n", move_count);
+    return (p.color == WHITE) ? (char)toupper(c) : c;
 }
 
-int main(void) {
-    ChessGameState game;
+void chess_game_to_fen(ChessGameState *game, char *buf, size_t buf_len) {
+    char *p = buf;
+    char *end = buf + buf_len - 1;
 
-    setvbuf(stdout, NULL, _IONBF, 0);
-    setvbuf(stderr, NULL, _IONBF, 0);
-    
-    debug_log = fopen("beatchess.log", "w");
-    if (debug_log) {
-        debug_print("=== BeatChess Engine ===\n");
-    }
-    
-    chess_init_board(&game);
-
-    ChessAIConfig config;
-    config.search_depth = search_depth;
-    config.threshold_centipawns = 25;
-    config.use_randomization = true;
-
-    char line[4096];
-    while (fgets(line, sizeof(line), stdin)) {
-        size_t len = strlen(line);
-        if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
-        
-        debug_print("[IN] %s\n", line);
-        
-        if (strcmp(line, "xboard") == 0) {
-            debug_print("[CMD] xboard\n");
-        } 
-        else if (strncmp(line, "protover", 8) == 0) {
-            debug_print("[CMD] protover\n");
-            printf("feature myname=\"BeatChess\"\n");
-            printf("feature usermove=1\n");
-            printf("feature sigint=0 sigterm=0\n");
-            printf("feature done=1\n");
-            fflush(stdout);
-        }
-        else if (strcmp(line, "new") == 0) {
-            debug_print("[CMD] new\n");
-            chess_init_board(&game);
-            game_mode = WvA;  /* Default to WvA */
-            waiting_for_go_in_ava = false;
-            debug_print("[STATE] Game mode: WvA (default), waiting for color assignment\n");
-        }
-        else if (strcmp(line, "go") == 0) {
-            debug_print("[CMD] go\n");
-            
-            if (game_mode == AvA) {
-                /* In AvA mode, "go" means play the whole game */
-                play_ava_game(&game, config);
-                waiting_for_go_in_ava = false;
+    /* Piece placement — rank 8 (row 0) to rank 1 (row 7) */
+    for (int row = 0; row < BOARD_SIZE && p < end; row++) {
+        int empty = 0;
+        for (int col = 0; col < BOARD_SIZE && p < end; col++) {
+            ChessPiece piece = game->board[row][col];
+            if (piece.type == EMPTY) {
+                empty++;
             } else {
-                /* In WvA/BvA, "go" means make one move if it's our turn */
-                if ((game_mode == WvA && game.turn == BLACK) ||
-                    (game_mode == BvA && game.turn == WHITE)) {
-                    
-                    debug_print("[GO] Computing move\n");
-                    ChessAIMoveResult result = chess_ai_compute_move(&game, config);
-                    
-                    if (result.move.from_row >= 0) {
-                        chess_make_move(&game, result.move);
-                        printf("move %s\n", move_to_str(result.move));
-                        fflush(stdout);
-                        debug_print("[GO] Move: %s\n", move_to_str(result.move));
-                    } else {
-                        debug_print("[GO] ERROR: No valid move\n");
-                    }
-                } else {
-                    debug_print("[GO] Not our turn\n");
-                }
+                if (empty) { p += snprintf(p, end - p, "%d", empty); empty = 0; }
+                char c = piece_to_fen_char(piece);
+                if (p < end) *p++ = c;
             }
         }
-        else if (strncmp(line, "usermove ", 9) == 0) {
-            const char *mv = line + 9;
-            debug_print("[CMD] usermove: %s\n", mv);
-            debug_print("[TURN-BEFORE] %s\n", game.turn == WHITE ? "WHITE" : "BLACK");
-        
-            ChessMove m = str_to_move(mv);
-            chess_make_move(&game, m);
-            debug_print("[TURN-AFTER] %s\n", game.turn == WHITE ? "WHITE" : "BLACK");
-            
-            /* Check if game has ended after opponent move */
-            ChessGameStatus status = chess_check_game_status(&game);
-            if (status == CHESS_CHECKMATE_WHITE) {
-                debug_print("[STATUS] BLACK WINS (checkmate)\n");
-            } else if (status == CHESS_CHECKMATE_BLACK) {
-                debug_print("[STATUS] WHITE WINS (checkmate)\n");
-            } else if (status == CHESS_STALEMATE) {
-                debug_print("[STATUS] STALEMATE\n");
-            }
-        }
-        else if (strncmp(line, "level", 5) == 0) {
-            debug_print("[CMD] level (ignored)\n");
-        }
-        else if (strncmp(line, "time", 4) == 0) {
-            debug_print("[CMD] time (ignored)\n");
-        }
-        else if (strncmp(line, "otim", 4) == 0) {
-            debug_print("[CMD] otim (ignored)\n");
-        }
-        else if (strncmp(line, "computer", 8) == 0) {
-            debug_print("[CMD] computer (opponent is AI)\n");
-        }
-        else if (strncmp(line, "accepted", 8) == 0) {
-            debug_print("[CMD] accepted\n");
-        }
-        else if (strcmp(line, "random") == 0) {
-            debug_print("[CMD] random\n");
-        }
-        else if (strcmp(line, "post") == 0) {
-            debug_print("[CMD] post\n");
-        }
-        else if (strcmp(line, "hard") == 0) {
-            debug_print("[CMD] hard\n");
-        }
-        else if (strcmp(line, "easy") == 0) {
-            debug_print("[CMD] easy\n");
-        }
-        else if (strcmp(line, "white") == 0) {
-            debug_print("[CMD] white - engine plays WHITE\n");
-            game_mode = BvA;  /* Engine is White, opponent is Black */
-            debug_print("[STATE] Game mode: BvA (engine plays White)\n");
-        }
-        else if (strcmp(line, "black") == 0) {
-            debug_print("[CMD] black - engine plays BLACK\n");
-            game_mode = WvA;  /* Engine is Black, opponent is White */
-            debug_print("[STATE] Game mode: WvA (engine plays Black)\n");
-        }
-        else if (strcmp(line, "quit") == 0) {
-            debug_print("[CMD] quit\n");
-            break;
-        }
-        else if (strlen(line) > 0) {
-            debug_print("[CMD] unknown: %s\n", line);
-        }
-        
-        /* Handle automatic moves in WvA/BvA when game is still playing */
-        if (game_mode != AvA) {  /* Not in AvA mode */
-            ChessGameStatus status = chess_check_game_status(&game);
-            
-            if (status == CHESS_PLAYING) {
-                /* Auto-move if it's our turn */
-                if ((game_mode == WvA && game.turn == BLACK) ||
-                    (game_mode == BvA && game.turn == WHITE)) {
-                    
-                    debug_print("[AUTO] Computing move\n");
-                    ChessAIMoveResult result = chess_ai_compute_move(&game, config);
-                    
-                    if (result.move.from_row >= 0) {
-                        chess_make_move(&game, result.move);
-                        printf("move %s\n", move_to_str(result.move));
-                        fflush(stdout);
-                        debug_print("[AUTO] Move: %s\n", move_to_str(result.move));
-                    }
-                }
-            }
-        }
-        
-        debug_print("[LOOP] Ready for next input\n\n");
+        if (empty && p < end) { p += snprintf(p, end - p, "%d", empty); }
+        if (row < 7 && p < end) *p++ = '/';
     }
-    
-    if (debug_log) {
-        debug_print("\n[SHUTDOWN] Engine shutting down\n");
-        fclose(debug_log);
+
+    /* Active color */
+    p += snprintf(p, end - p, " %c", game->turn == WHITE ? 'w' : 'b');
+
+    /* Castling availability */
+    char castling[5] = {0};
+    int ci = 0;
+    if (!game->white_king_moved) {
+        if (!game->white_rook_h_moved) castling[ci++] = 'K';
+        if (!game->white_rook_a_moved) castling[ci++] = 'Q';
     }
-    return 0;
+    if (!game->black_king_moved) {
+        if (!game->black_rook_h_moved) castling[ci++] = 'k';
+        if (!game->black_rook_a_moved) castling[ci++] = 'q';
+    }
+    if (ci == 0) castling[ci++] = '-';
+    castling[ci] = '\0';
+    p += snprintf(p, end - p, " %s", castling);
+
+    /* En passant target square */
+    if (game->en_passant_col >= 0) {
+        char ep_file = 'a' + game->en_passant_col;
+        int  ep_rank = 8 - game->en_passant_row;   /* row 0 = rank 8 */
+        p += snprintf(p, end - p, " %c%d", ep_file, ep_rank);
+    } else {
+        p += snprintf(p, end - p, " -");
+    }
+
+    /* Halfmove clock and fullmove number (we don't track these precisely) */
+    p += snprintf(p, end - p, " 0 1");
+
+    *p = '\0';
+}
+
+/* ============================================================================
+ * XBoard move parsing  (e.g. "e2e4", "e7e8q")
+ * ============================================================================ */
+
+bool xboard_parse_move(const char *token, ChessMove *out_move) {
+    /* Expect at least 4 chars: file rank file rank */
+    if (!token || strlen(token) < 4) return false;
+    if (token[0] < 'a' || token[0] > 'h') return false;
+    if (token[1] < '1' || token[1] > '8') return false;
+    if (token[2] < 'a' || token[2] > 'h') return false;
+    if (token[3] < '1' || token[3] > '8') return false;
+
+    int from_col = token[0] - 'a';
+    int from_row = 8 - (token[1] - '0');   /* rank 8 = row 0 */
+    int to_col   = token[2] - 'a';
+    int to_row   = 8 - (token[3] - '0');
+
+    out_move->from_col = from_col;
+    out_move->from_row = from_row;
+    out_move->to_col   = to_col;
+    out_move->to_row   = to_row;
+    out_move->score    = 0;
+    /* Promotion piece (token[4]) is ignored for now — chess_execute_move
+     * in beatchess already promotes to queen by default. */
+    return true;
+}
+
+/* ============================================================================
+ * Reader thread — runs in background, blocks on fgets from engine stdout
+ * ============================================================================ */
+
+static void *reader_thread_fn(void *arg) {
+    XBoardEngine *eng = (XBoardEngine *)arg;
+    char line[512];
+
+    while (eng->engine_ok && fgets(line, sizeof(line), eng->from_engine)) {
+        /* Strip trailing whitespace */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'
+                           || line[len-1] == ' ')) {
+            line[--len] = '\0';
+        }
+        if (len == 0) continue;
+
+        /* XBoard engines send move responses as:
+         *   "move e2e4"        (most engines)
+         *   "My move is: e2e4" (gnuchess legacy format)
+         * Also skip lines starting with '#' (comments) or known noise. */
+
+        const char *mv_token = NULL;
+
+        if (strncmp(line, "move ", 5) == 0) {
+            mv_token = line + 5;
+        } else if (strncmp(line, "My move is", 10) == 0) {
+            /* "My move is: e2e4" or "My move is e2e4" */
+            const char *colon = strchr(line + 10, ':');
+            mv_token = colon ? colon + 2 : line + 11;
+            while (*mv_token == ' ') mv_token++;
+        }
+
+        if (mv_token) {
+            ChessMove mv;
+            if (xboard_parse_move(mv_token, &mv)) {
+                pthread_mutex_lock(&eng->lock);
+                eng->best_move = mv;
+                eng->has_move  = true;
+                eng->thinking  = false;
+                pthread_cond_signal(&eng->cond);
+                pthread_mutex_unlock(&eng->lock);
+            }
+        }
+        /* All other lines (feature, tellics, #, etc.) are silently ignored. */
+    }
+
+    pthread_mutex_lock(&eng->lock);
+    eng->engine_ok = false;
+    eng->thinking  = false;
+    pthread_cond_signal(&eng->cond);
+    pthread_mutex_unlock(&eng->lock);
+
+    return NULL;
+}
+
+/* ============================================================================
+ * Public API implementation
+ * ============================================================================ */
+
+bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
+    memset(eng, 0, sizeof(*eng));
+    strncpy(eng->engine_cmd, engine_cmd, sizeof(eng->engine_cmd) - 1);
+    eng->engine_ok = false;
+
+    /* Create two pipes: parent→child (stdin) and child→parent (stdout) */
+    int to_child[2], from_child[2];
+    if (pipe(to_child) < 0 || pipe(from_child) < 0) {
+        perror("xboard_engine_init: pipe");
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("xboard_engine_init: fork");
+        return false;
+    }
+
+    if (pid == 0) {
+        /* Child process */
+        dup2(to_child[0],   STDIN_FILENO);
+        dup2(from_child[1], STDOUT_FILENO);
+        /* Close unused ends */
+        close(to_child[1]);
+        close(from_child[0]);
+        /* Redirect stderr to /dev/null to avoid polluting our pipe */
+        FILE *devnull = fopen("/dev/null", "w");
+        if (devnull) dup2(fileno(devnull), STDERR_FILENO);
+
+        execl("/bin/sh", "sh", "-c", engine_cmd, (char *)NULL);
+        _exit(127);   /* execl failed */
+    }
+
+    /* Parent process */
+    close(to_child[0]);
+    close(from_child[1]);
+
+    eng->child_pid   = pid;
+    eng->to_engine   = fdopen(to_child[1],   "w");
+    eng->from_engine = fdopen(from_child[0], "r");
+
+    if (!eng->to_engine || !eng->from_engine) {
+        perror("xboard_engine_init: fdopen");
+        kill(pid, SIGKILL);
+        return false;
+    }
+
+    eng->engine_ok = true;
+
+    pthread_mutex_init(&eng->lock, NULL);
+    pthread_cond_init(&eng->cond, NULL);
+
+    /* XBoard handshake */
+    engine_send(eng, "xboard");
+    engine_send(eng, "protover 2");
+    /* Tell the engine not to use time controls — we drive it manually */
+    engine_send(eng, "level 0 5 0");
+    engine_send(eng, "sd " XBOARD_DEFAULT_DEPTH_STR);
+    engine_send(eng, "new");
+    engine_send(eng, "force");   /* engine won't move until we say "go" */
+
+    /* Start background reader thread */
+    if (pthread_create(&eng->reader_thread, NULL, reader_thread_fn, eng) != 0) {
+        perror("xboard_engine_init: pthread_create");
+        engine_send(eng, "quit");
+        fclose(eng->to_engine);
+        fclose(eng->from_engine);
+        kill(pid, SIGKILL);
+        eng->engine_ok = false;
+        return false;
+    }
+
+    return true;
+}
+
+void xboard_engine_quit(XBoardEngine *eng) {
+    if (!eng->engine_ok) return;
+    eng->engine_ok = false;
+    engine_send(eng, "quit");
+    fclose(eng->to_engine);   eng->to_engine   = NULL;
+    fclose(eng->from_engine); eng->from_engine = NULL;
+    pthread_join(eng->reader_thread, NULL);
+    waitpid(eng->child_pid, NULL, 0);
+    pthread_mutex_destroy(&eng->lock);
+    pthread_cond_destroy(&eng->cond);
+}
+
+void xboard_engine_set_depth(XBoardEngine *eng, int depth) {
+    engine_sendf(eng, "sd %d", depth);
+}
+
+void xboard_start_thinking(XBoardEngine *eng, ChessGameState *game) {
+    if (!eng->engine_ok) return;
+
+    pthread_mutex_lock(&eng->lock);
+    eng->has_move = false;
+    eng->thinking = true;
+    eng->last_game = *game;
+    pthread_mutex_unlock(&eng->lock);
+
+    /* Use "setboard <FEN>" to sync position, then "go" */
+    char fen[128];
+    chess_game_to_fen(game, fen, sizeof(fen));
+    engine_send(eng, "force");          /* halt engine if it was pondering   */
+    engine_sendf(eng, "setboard %s", fen);
+    engine_send(eng, "go");             /* engine plays the side to move      */
+}
+
+bool xboard_has_move(XBoardEngine *eng) {
+    pthread_mutex_lock(&eng->lock);
+    bool r = eng->has_move;
+    pthread_mutex_unlock(&eng->lock);
+    return r;
+}
+
+bool xboard_is_thinking(XBoardEngine *eng) {
+    pthread_mutex_lock(&eng->lock);
+    bool r = eng->thinking;
+    pthread_mutex_unlock(&eng->lock);
+    return r;
+}
+
+ChessMove xboard_get_best_move(XBoardEngine *eng) {
+    pthread_mutex_lock(&eng->lock);
+    ChessMove mv = eng->best_move;
+    eng->has_move = false;
+    pthread_mutex_unlock(&eng->lock);
+    return mv;
+}
+
+ChessMove xboard_get_best_move_now(XBoardEngine *eng) {
+    pthread_mutex_lock(&eng->lock);
+    ChessMove mv;
+    if (eng->has_move) {
+        mv = eng->best_move;
+        eng->has_move = false;
+    } else {
+        memset(&mv, 0, sizeof(mv));
+        mv.from_row = -1;   /* sentinel: no move available yet */
+    }
+    pthread_mutex_unlock(&eng->lock);
+    return mv;
 }

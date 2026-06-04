@@ -25,6 +25,7 @@
 #include "chess_sound.h"
 #include "DejaVuMono.h"
 #include "DejaVuMonoBold.h"
+#include "xboard_engine.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
@@ -326,6 +327,10 @@ typedef struct {
     int                move_history_count;
     ChessThinkingState thinking;
 
+    /* XBoard external engine */
+    XBoardEngine       xboard;
+    bool               use_xboard;
+
     /* SDL */
     SDL_Window   *window;
     SDL_Renderer *renderer;
@@ -512,6 +517,17 @@ static void start_animation(App *app, int fr, int fc, int tr, int tc,
     app->post_anim_pending = true;
 }
 
+/* ============================================================================
+ * AI dispatch helpers — routes to xboard engine or built-in minimax
+ * ============================================================================ */
+
+static void start_ai_thinking(App *app) {
+    if (app->use_xboard)
+        xboard_start_thinking(&app->xboard, &app->game);
+    else
+        start_ai_thinking(app);
+}
+
 static void game_new(App *app) {
     chess_init_board(&app->game);
     app->selected_row    = -1;
@@ -541,7 +557,7 @@ static void game_new(App *app) {
     app->move_history_count = 0;
     app->game.turn       = WHITE;
     snprintf(app->status, sizeof(app->status), "New game — White to move");
-    chess_start_thinking(&app->thinking, &app->game);
+    start_ai_thinking(app);
 }
 
 static void check_game_over(App *app) {
@@ -642,7 +658,7 @@ static void finish_animation(App *app) {
         if (in_check) audio_play_check();
         const char *turn = app->game.turn == WHITE ? "White" : "Black";
         snprintf(app->status, sizeof(app->status), "%s to move", turn);
-        chess_start_thinking(&app->thinking, &app->game);
+        start_ai_thinking(app);
     }
 }
 
@@ -701,7 +717,7 @@ static void undo_move(App *app) {
     memset(app->danger_squares, 0, sizeof(app->danger_squares));
     memset(app->check_squares,  0, sizeof(app->check_squares));
     snprintf(app->status, sizeof(app->status), "Move undone");
-    chess_start_thinking(&app->thinking, &app->game);
+    start_ai_thinking(app);
 }
 
 static void player_resign(App *app) {
@@ -886,8 +902,10 @@ static void draw_panel(App *app) {
     y += (int)(36*g_scale);
 
     const char *mode = app->player_vs_ai
-        ? (app->player_is_white ? "Player(W) vs AI(B)" : "Player(B) vs AI(W)")
-        : "AI vs AI";
+        ? (app->player_is_white
+            ? (app->use_xboard ? "Player(W) vs Engine(B)" : "Player(W) vs AI(B)")
+            : (app->use_xboard ? "Player(B) vs Engine(W)" : "Player(B) vs AI(W)"))
+        : (app->use_xboard ? "Engine vs Engine" : "AI vs AI");
     render_text(r, g_font_sm, mode, x, y, 160, 200, 230);
     y += (int)(20*g_scale);
 
@@ -1230,7 +1248,7 @@ static void handle_promotion_click(App *app, int px, int py) {
                 if(ic)audio_play_check();
                 const char*t=app->game.turn==WHITE?"White":"Black";
                 snprintf(app->status,sizeof(app->status),"%s to move",t);
-                chess_start_thinking(&app->thinking,&app->game);
+                start_ai_thinking(app);
             }
             return;
         }
@@ -1383,7 +1401,7 @@ static void handle_dialog_key(App *app, SDL_Keycode key, bool is_save) {
                     app->game=vis.game; app->move_history_count=vis.move_history_count; app->move_count=vis.move_count;
                     for(int i=0;i<vis.move_history_count;i++) app->move_history[i]=vis.move_history[i];
                     snprintf(app->status,sizeof(app->status),"Loaded: %s",fn);
-                    chess_start_thinking(&app->thinking,&app->game);
+                    start_ai_thinking(app);
                 }
             }
             app->screen=SCREEN_GAME; break;
@@ -1452,35 +1470,51 @@ static void update_ai(App *app, float dt) {
                    (app->player_vs_ai && app->game.turn != player_color);
     if (!ai_turn) return;
 
+    bool has_move, is_thinking;
+    int  depth = 0;
+
+    if (app->use_xboard) {
+        has_move    = xboard_has_move(&app->xboard);
+        is_thinking = xboard_is_thinking(&app->xboard);
+    } else {
 #if BEATCHESS_HAS_PTHREAD
-    pthread_mutex_lock(&app->thinking.lock);
+        pthread_mutex_lock(&app->thinking.lock);
 #endif
-    bool has_move    = app->thinking.has_move;
-    int  depth       = app->thinking.current_depth;
-    bool is_thinking = app->thinking.thinking;
+        has_move    = app->thinking.has_move;
+        depth       = app->thinking.current_depth;
+        is_thinking = app->thinking.thinking;
 #if BEATCHESS_HAS_PTHREAD
-    pthread_mutex_unlock(&app->thinking.lock);
+        pthread_mutex_unlock(&app->thinking.lock);
 #endif
+    }
 
     app->ai_thinking = is_thinking || has_move;
     if (is_thinking || has_move) app->time_thinking += dt;
     if (!has_move) return;
 
     bool should_play = false;
-    if (app->time_thinking >= 4.0f)                      should_play = true;
-    else if (app->time_thinking >= 0.5f && depth >= 3)   should_play = true;
+    if (app->time_thinking >= 4.0f)                                         should_play = true;
+    else if (app->use_xboard  && has_move)                                  should_play = true;
+    else if (!app->use_xboard && app->time_thinking >= 0.5f && depth >= 3)  should_play = true;
     if (!should_play) return;
 
-    ChessMove mv = chess_get_best_move_now(&app->thinking);
+    ChessMove mv;
+    if (app->use_xboard)
+        mv = xboard_get_best_move_now(&app->xboard);
+    else
+        mv = chess_get_best_move_now(&app->thinking);
+
     app->time_thinking = 0;
 
+    if (mv.from_row < 0) return;  /* xboard sentinel: move not ready yet */
+
     if (!chess_is_valid_move(&app->game, mv.from_row, mv.from_col, mv.to_row, mv.to_col)) {
-        chess_start_thinking(&app->thinking, &app->game); return;
+        start_ai_thinking(app); return;
     }
     ChessGameState tmp = app->game;
     chess_make_move(&tmp, mv);
     if (chess_is_in_check(&tmp, app->game.turn)) {
-        chess_start_thinking(&app->thinking, &app->game); return;
+        start_ai_thinking(app); return;
     }
 
     /* track capture */
@@ -1498,7 +1532,45 @@ static void update_ai(App *app, float dt) {
  * ============================================================================ */
 
 int main(int argc, char *argv[]) {
-    (void)argc; (void)argv;
+    const char *cli_engine = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf(
+                "Usage: beatchess_sdl [OPTIONS]\n"
+                "\n"
+                "Options:\n"
+                "  --engine CMD   Use an external XBoard engine subprocess.\n"
+                "                 CMD is a shell command, e.g.:\n"
+                "                   --engine \"gnuchess --xboard\"\n"
+                "                   --engine \"crafty\"\n"
+                "                   --engine \"stockfish --xboard\"\n"
+                "                 Overrides the BEATCHESS_ENGINE environment variable.\n"
+                "                 Falls back to the built-in AI if the engine fails to start.\n"
+                "  -h, --help     Show this help and exit.\n"
+                "\n"
+                "Environment:\n"
+                "  BEATCHESS_ENGINE   Same as --engine (--engine takes precedence).\n"
+                "\n"
+                "In-game keyboard shortcuts:\n"
+                "  N    New game\n"
+                "  U    Undo move\n"
+                "  R    Resign\n"
+                "  A    Toggle AI vs AI / Player vs AI\n"
+                "  B    Swap player colour\n"
+                "  F    Flip board\n"
+                "  M    Toggle music\n"
+                "  ?    In-game help\n"
+                "  Q    Quit\n"
+            );
+            return 0;
+        } else if (strcmp(argv[i], "--engine") == 0 && i+1 < argc) {
+            cli_engine = argv[++i];
+        } else {
+            fprintf(stderr, "Unknown option: %s\nRun with --help for usage.\n", argv[i]);
+            return 1;
+        }
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO|SDL_INIT_TIMER) != 0) {
         fprintf(stderr,"SDL_Init: %s\n",SDL_GetError()); return 1;
@@ -1539,6 +1611,23 @@ int main(int argc, char *argv[]) {
     chess_clear_transposition_table();
     srand((unsigned)time(NULL));
     chess_init_thinking_state(&app->thinking);
+
+    /* Try to connect to an external XBoard engine.
+     * Use --engine "cmd" on the command line, or set BEATCHESS_ENGINE, e.g.:
+     *   ./beatchess_sdl --engine "gnuchess --xboard"
+     *   BEATCHESS_ENGINE="stockfish --xboard" ./beatchess_sdl
+     * Falls back to the built-in minimax if the engine can't be spawned. */
+    app->use_xboard = false;
+    {
+        const char *engine_cmd = cli_engine ? cli_engine : getenv("BEATCHESS_ENGINE");
+        if (!engine_cmd) engine_cmd = "gnuchess --xboard";
+        if (xboard_engine_init(&app->xboard, engine_cmd)) {
+            app->use_xboard = true;
+            fprintf(stderr, "Using external engine: %s\n", engine_cmd);
+        } else {
+            fprintf(stderr, "External engine unavailable (%s), using built-in AI\n", engine_cmd);
+        }
+    }
 
     app->player_vs_ai    = true;
     app->player_is_white = true;
@@ -1680,6 +1769,8 @@ int main(int argc, char *argv[]) {
     }
 
     SDL_StopTextInput();
+    if (app->use_xboard)
+        xboard_engine_quit(&app->xboard);
     chess_cleanup_thinking_state(&app->thinking);
     audio_shutdown();
     sdl_destroy_chess_pieces();
