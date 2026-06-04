@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <signal.h>
@@ -182,7 +183,26 @@ static void *reader_thread_fn(void *arg) {
                 pthread_mutex_unlock(&eng->lock);
             }
         }
-        /* All other lines (feature, tellics, #, etc.) are silently ignored. */
+        /* Parse engine name from protover 2 handshake:
+         *   feature myname="GNU Chess 6.2.9"
+         *   feature myname=Crafty */
+        const char *fn = strstr(line, "myname=");
+        if (fn) {
+            fn += 7;
+            char name[128] = {0};
+            int ni = 0;
+            if (*fn == '"') {
+                fn++;
+                while (*fn && *fn != '"' && ni < 127) name[ni++] = *fn++;
+            } else {
+                while (*fn && *fn != ' ' && ni < 127) name[ni++] = *fn++;
+            }
+            if (name[0]) {
+                pthread_mutex_lock(&eng->lock);
+                strncpy(eng->engine_name, name, sizeof(eng->engine_name) - 1);
+                pthread_mutex_unlock(&eng->lock);
+            }
+        }
     }
 
     pthread_mutex_lock(&eng->lock);

@@ -91,6 +91,10 @@ static void layout_update(int win_w, int win_h) {
     if (FONT_SM  < 9)  FONT_SM  = 9;
     if (FONT_MED < 12) FONT_MED = 12;
     if (FONT_LG  < 16) FONT_LG  = 16;
+    /* Cap at base size — panel is a fixed sidebar, text shouldn't grow with window */
+    if (FONT_SM  > 13) FONT_SM  = 13;
+    if (FONT_MED > 17) FONT_MED = 17;
+    if (FONT_LG  > 22) FONT_LG  = 22;
 }
 
 /* ============================================================================
@@ -525,7 +529,7 @@ static void start_ai_thinking(App *app) {
     if (app->use_xboard)
         xboard_start_thinking(&app->xboard, &app->game);
     else
-        start_ai_thinking(app);
+        chess_start_thinking(&app->thinking, &app->game);
 }
 
 static void game_new(App *app) {
@@ -898,57 +902,78 @@ static void draw_panel(App *app) {
 
     sdl_fill_rect(r, x-(int)(4*g_scale), y, PANEL_W+(int)(4*g_scale), 8*SQUARE_SIZE, 35, 35, 42, 255);
 
-    render_text_centered(r, g_font_lg, "BeatChess", x+PANEL_W/2, y+(int)(6*g_scale), 255, 220, 60);
-    y += (int)(36*g_scale);
+    render_text_centered(r, g_font_lg, "BeatChess", x+PANEL_W/2, y+6, 255, 220, 60);
+    y += 36;
 
-    const char *mode = app->player_vs_ai
-        ? (app->player_is_white
-            ? (app->use_xboard ? "Player(W) vs Engine(B)" : "Player(W) vs AI(B)")
-            : (app->use_xboard ? "Player(B) vs Engine(W)" : "Player(B) vs AI(W)"))
-        : (app->use_xboard ? "Engine vs Engine" : "AI vs AI");
+    /* Engine display name: use what the engine reported via "feature myname=",
+     * falling back to the command string if the handshake hasn't arrived yet. */
+    char engine_label[128];
+    if (app->use_xboard) {
+        pthread_mutex_lock(&app->xboard.lock);
+        if (app->xboard.engine_name[0])
+            strncpy(engine_label, app->xboard.engine_name, sizeof(engine_label)-1);
+        else
+            strncpy(engine_label, app->xboard.engine_cmd, sizeof(engine_label)-1);
+        pthread_mutex_unlock(&app->xboard.lock);
+    }
+    char mode_buf[160];
+    const char *mode;
+    if (app->use_xboard) {
+        if (app->player_vs_ai)
+            snprintf(mode_buf, sizeof(mode_buf),
+                     app->player_is_white ? "Player(W) vs %s(B)" : "Player(B) vs %s(W)",
+                     engine_label);
+        else
+            snprintf(mode_buf, sizeof(mode_buf), "%s vs %s", engine_label, engine_label);
+        mode = mode_buf;
+    } else {
+        mode = app->player_vs_ai
+            ? (app->player_is_white ? "Player(W) vs BeatChess(B)" : "Player(B) vs BeatChess(W)")
+            : "BeatChess vs BeatChess";
+    }
     render_text(r, g_font_sm, mode, x, y, 160, 200, 230);
-    y += (int)(20*g_scale);
+    y += 20;
 
     char buf[128];
     const char *turn = app->game.turn == WHITE ? "White" : "Black";
     snprintf(buf, sizeof(buf), "Turn: %s  Move: %d", turn, app->move_count);
     render_text(r, g_font_sm, buf, x, y, 200, 200, 200);
-    y += (int)(20*g_scale);
+    y += 20;
 
     Uint8 sr = app->is_checkmate||app->resigned ? 255 : app->is_in_check ? 220 : 160;
     Uint8 sg = app->is_checkmate||app->resigned ?  60 : app->is_in_check ?  80 : 180;
     Uint8 sb = app->is_checkmate||app->resigned ?  60 : 200;
     render_text(r, g_font_sm, app->status, x, y, sr, sg, sb);
-    y += (int)(26*g_scale);
+    y += 26;
 
     long wm=(long)app->white_ms, bm=(long)app->black_ms;
     snprintf(buf,sizeof(buf),"White: %ld:%02ld.%03ld",wm/60000,(wm%60000)/1000,wm%1000);
     render_text(r, g_font_sm, buf, x, y, 220, 220, 220);
-    y += (int)(16*g_scale);
+    y += 16;
     snprintf(buf,sizeof(buf),"Black: %ld:%02ld.%03ld",bm/60000,(bm%60000)/1000,bm%1000);
     render_text(r, g_font_sm, buf, x, y, 180, 180, 180);
-    y += (int)(22*g_scale);
+    y += 22;
 
     if (app->ai_thinking) {
         render_text(r, g_font_sm, "AI thinking...", x, y, 100, 220, 255);
-        y += (int)(18*g_scale);
+        y += 18;
     }
 
     sdl_fill_rect(r, x, y, PANEL_W, 1, 70, 70, 90, 255);
-    y += (int)(8*g_scale);
+    y += 8;
 
-    /* Buttons */
+    /* Buttons — fixed pixel sizes, don't scale with window */
     bool game_over = app->is_checkmate || app->is_stalemate || app->resigned;
     Button btns[] = {
-        {x, y,                        PANEL_W, (int)(24*g_scale), "N - New Game",        0, true},
-        {x, y+(int)(28*g_scale),  PANEL_W, (int)(24*g_scale), "U - Undo",            0, !game_over},
-        {x, y+(int)(56*g_scale),  PANEL_W, (int)(24*g_scale), "R - Resign",          0, !game_over && app->player_vs_ai},
-        {x, y+(int)(84*g_scale),  PANEL_W, (int)(24*g_scale), "A - Toggle AI Mode",  0, true},
-        {x, y+(int)(112*g_scale), PANEL_W, (int)(24*g_scale), "B - Swap Color",      0, true},
-        {x, y+(int)(140*g_scale), PANEL_W, (int)(24*g_scale), "F - Flip Board",      0, true},
-        {x, y+(int)(168*g_scale), PANEL_W, (int)(24*g_scale), g_music_on ? "M - Music: ON" : "M - Music: OFF", 0, true},
-        {x, y+(int)(196*g_scale), PANEL_W, (int)(24*g_scale), "? - Help",            0, true},
-        {x, y+(int)(224*g_scale), PANEL_W, (int)(24*g_scale), "Q - Quit",            0, true},
+        {x, y,      PANEL_W, 24, "N - New Game",        0, true},
+        {x, y+28,   PANEL_W, 24, "U - Undo",            0, !game_over},
+        {x, y+56,   PANEL_W, 24, "R - Resign",          0, !game_over && app->player_vs_ai},
+        {x, y+84,   PANEL_W, 24, "A - Toggle AI Mode",  0, true},
+        {x, y+112,  PANEL_W, 24, "B - Swap Color",      0, true},
+        {x, y+140,  PANEL_W, 24, "F - Flip Board",      0, true},
+        {x, y+168,  PANEL_W, 24, g_music_on ? "M - Music: ON" : "M - Music: OFF", 0, true},
+        {x, y+196,  PANEL_W, 24, "? - Help",            0, true},
+        {x, y+224,  PANEL_W, 24, "Q - Quit",            0, true},
     };
     for (int i = 0; i < 9; i++) {
         if (!btns[i].enabled) continue;
@@ -957,14 +982,14 @@ static void draw_panel(App *app) {
         if (i == 2) btn_draw(r, &btns[i], hov, false, 65, 30, 30);
         else        btn_draw(r, &btns[i], hov, false);
     }
-    y += (int)(256*g_scale);
+    y += 256;
 
     /* Captured pieces — pinned to bottom of panel, always visible */
     {
         int panel_bottom = BOARD_MARGIN_Y + MENU_H + 8*SQUARE_SIZE;
-        int cap_sz = (int)(16 * g_scale);
-        int cy = panel_bottom - cap_sz*2 - (int)(18*g_scale);
-        render_text(r, g_font_sm, "Captured:", x, cy - (int)(16*g_scale), 140, 140, 160);
+        int cap_sz = 16;
+        int cy = panel_bottom - cap_sz*2 - 18;
+        render_text(r, g_font_sm, "Captured:", x, cy - 16, 140, 140, 160);
         /* Draw black captured (white pieces taken by black) */
         int cx = x;
         for (int type = PAWN; type <= QUEEN; type++) {
@@ -1356,14 +1381,14 @@ static void handle_menu_click(App *app, int px, int py) {
 
     /* Panel buttons */
     bool game_over = app->is_checkmate || app->is_stalemate || app->resigned;
-    int base_y = BOARD_MARGIN_Y + MENU_H + (int)((36+20+20+26+16+22+8)*g_scale);
+    int base_y = BOARD_MARGIN_Y + MENU_H + (int)((36+20+20+26+16+22+8));
     if (px >= PANEL_X && px < LOGICAL_W) {
-        int bys[]={0,(int)(28*g_scale),(int)(56*g_scale),(int)(84*g_scale),(int)(112*g_scale),(int)(140*g_scale),(int)(168*g_scale),(int)(196*g_scale),(int)(224*g_scale)};
+        int bys[]={0,28,56,84,112,140,168,196,224};
         SDL_Keycode ks[]={SDLK_n,SDLK_u,SDLK_r,SDLK_a,SDLK_b,SDLK_f,SDLK_m,SDLK_QUESTION,SDLK_q};
         for (int i=0;i<9;i++){
             if (i==1&&game_over) continue;
             if (i==2&&(game_over||!app->player_vs_ai)) continue;
-            if (py>=base_y+bys[i]&&py<base_y+bys[i]+(int)(24*g_scale)){handle_game_key(app,ks[i]);return;}
+            if (py>=base_y+bys[i]&&py<base_y+bys[i]+24){handle_game_key(app,ks[i]);return;}
         }
         return;
     }
@@ -1493,9 +1518,8 @@ static void update_ai(App *app, float dt) {
     if (!has_move) return;
 
     bool should_play = false;
-    if (app->time_thinking >= 4.0f)                                         should_play = true;
-    else if (app->use_xboard  && has_move)                                  should_play = true;
-    else if (!app->use_xboard && app->time_thinking >= 0.5f && depth >= 3)  should_play = true;
+    if (app->time_thinking >= 4.0f)                          should_play = true;
+    else if (has_move && app->time_thinking >= 0.5f)         should_play = true;
     if (!should_play) return;
 
     ChessMove mv;
@@ -1546,7 +1570,7 @@ int main(int argc, char *argv[]) {
                 "                   --engine \"crafty\"\n"
                 "                   --engine \"stockfish --xboard\"\n"
                 "                 Overrides the BEATCHESS_ENGINE environment variable.\n"
-                "                 Falls back to the built-in AI if the engine fails to start.\n"
+                "                 Without this flag the built-in AI is used.\n"
                 "  -h, --help     Show this help and exit.\n"
                 "\n"
                 "Environment:\n"
@@ -1612,20 +1636,19 @@ int main(int argc, char *argv[]) {
     srand((unsigned)time(NULL));
     chess_init_thinking_state(&app->thinking);
 
-    /* Try to connect to an external XBoard engine.
-     * Use --engine "cmd" on the command line, or set BEATCHESS_ENGINE, e.g.:
-     *   ./beatchess_sdl --engine "gnuchess --xboard"
-     *   BEATCHESS_ENGINE="stockfish --xboard" ./beatchess_sdl
-     * Falls back to the built-in minimax if the engine can't be spawned. */
+    /* Use an external XBoard engine only if explicitly requested via
+     * --engine on the command line or the BEATCHESS_ENGINE environment variable.
+     * Otherwise the built-in minimax AI is used. */
     app->use_xboard = false;
     {
         const char *engine_cmd = cli_engine ? cli_engine : getenv("BEATCHESS_ENGINE");
-        if (!engine_cmd) engine_cmd = "gnuchess --xboard";
-        if (xboard_engine_init(&app->xboard, engine_cmd)) {
-            app->use_xboard = true;
-            fprintf(stderr, "Using external engine: %s\n", engine_cmd);
-        } else {
-            fprintf(stderr, "External engine unavailable (%s), using built-in AI\n", engine_cmd);
+        if (engine_cmd) {
+            if (xboard_engine_init(&app->xboard, engine_cmd)) {
+                app->use_xboard = true;
+                fprintf(stderr, "Using external engine: %s\n", engine_cmd);
+            } else {
+                fprintf(stderr, "External engine unavailable (%s), using built-in AI\n", engine_cmd);
+            }
         }
     }
 
