@@ -177,7 +177,9 @@ static void *reader_thread_fn(void *arg) {
         if (mv_token) {
             ChessMove mv;
             if (xboard_parse_move(mv_token, &mv)) {
+#ifndef MSDOS                
                 SDL_Log("[engine] move: %s", mv_token);
+#endif
                 pthread_mutex_lock(&eng->lock);
                 eng->best_move = mv;
                 eng->has_move  = true;
@@ -193,7 +195,9 @@ static void *reader_thread_fn(void *arg) {
                 if (strncmp(tok, "(none)", 6) != 0) {
                     ChessMove mv;
                     if (xboard_parse_move(tok, &mv)) {
+#ifndef MSDOS
                         SDL_Log("[engine] bestmove: %s", tok);
+#endif
                         pthread_mutex_lock(&eng->lock);
                         eng->best_move = mv;
                         eng->has_move  = true;
@@ -206,11 +210,17 @@ static void *reader_thread_fn(void *arg) {
                 pthread_mutex_lock(&eng->lock);
                 strncpy(eng->engine_name, line + 8, sizeof(eng->engine_name) - 1);
                 pthread_mutex_unlock(&eng->lock);
+#ifndef MSDOS
                 SDL_Log("[engine] %s", line);
+#endif
             } else if (strncmp(line, "info ", 5) == 0) {
+#ifndef MSDOS
                 SDL_Log("[engine thinking] %s", line);
+#endif
             } else {
+#ifndef MSDOS
                 SDL_Log("[engine] %s", line);
+#endif
             }
         }
 
