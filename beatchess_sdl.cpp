@@ -743,7 +743,7 @@ static void check_game_over(App *app) {
     if (st == CHESS_PLAYING) return;
     if (st == CHESS_CHECKMATE_WHITE || st == CHESS_CHECKMATE_BLACK) {
         app->is_checkmate = true;
-        const char *winner = (st == CHESS_CHECKMATE_BLACK) ? "White" : "Black";
+        const char *winner = (st == CHESS_CHECKMATE_BLACK) ? "Black" : "White";
         snprintf(app->status, sizeof(app->status), "Checkmate! %s wins!", winner);
         audio_play_checkmate();
     } else {
