@@ -331,9 +331,12 @@ typedef struct {
     int                move_history_count;
     ChessThinkingState thinking;
 
-    /* XBoard external engine */
-    XBoardEngine       xboard;
-    bool               use_xboard;
+    /* Per-side engines: white_engine drives White, black_engine drives Black.
+     * Either can be the internal BeatChess AI (use_*_xboard == false). */
+    XBoardEngine       white_engine;
+    XBoardEngine       black_engine;
+    bool               use_white_xboard;
+    bool               use_black_xboard;
 
     /* SDL */
     SDL_Window   *window;
@@ -526,8 +529,11 @@ static void start_animation(App *app, int fr, int fc, int tr, int tc,
  * ============================================================================ */
 
 static void start_ai_thinking(App *app) {
-    if (app->use_xboard)
-        xboard_start_thinking(&app->xboard, &app->game);
+    bool white_turn = (app->game.turn == WHITE);
+    bool use_xboard = white_turn ? app->use_white_xboard : app->use_black_xboard;
+    XBoardEngine *eng = white_turn ? &app->white_engine : &app->black_engine;
+    if (use_xboard)
+        xboard_start_thinking(eng, &app->game);
     else
         chess_start_thinking(&app->thinking, &app->game);
 }
@@ -905,31 +911,37 @@ static void draw_panel(App *app) {
     render_text_centered(r, g_font_lg, "BeatChess", x+PANEL_W/2, y+6, 255, 220, 60);
     y += 36;
 
-    /* Engine display name: use what the engine reported via "feature myname=",
-     * falling back to the command string if the handshake hasn't arrived yet. */
-    char engine_label[128];
-    if (app->use_xboard) {
-        pthread_mutex_lock(&app->xboard.lock);
-        if (app->xboard.engine_name[0])
-            strncpy(engine_label, app->xboard.engine_name, sizeof(engine_label)-1);
+    /* Build engine label for each side */
+    auto engine_label = [&](bool use_xboard, XBoardEngine *eng) -> const char * {
+        static char bufs[2][128];
+        static int idx = 0;
+        char *buf = bufs[idx ^= 1];
+        if (!use_xboard) { return "BeatChess"; }
+        pthread_mutex_lock(&eng->lock);
+        if (eng->engine_name[0])
+            strncpy(buf, eng->engine_name, 127);
         else
-            strncpy(engine_label, app->xboard.engine_cmd, sizeof(engine_label)-1);
-        pthread_mutex_unlock(&app->xboard.lock);
-    }
+            strncpy(buf, eng->engine_cmd, 127);
+        buf[127] = '\0';
+        pthread_mutex_unlock(&eng->lock);
+        return buf;
+    };
+
     char mode_buf[160];
     const char *mode;
-    if (app->use_xboard) {
-        if (app->player_vs_ai)
-            snprintf(mode_buf, sizeof(mode_buf),
-                     app->player_is_white ? "Player(W) vs %s(B)" : "Player(B) vs %s(W)",
-                     engine_label);
-        else
-            snprintf(mode_buf, sizeof(mode_buf), "%s vs %s", engine_label, engine_label);
+    if (app->player_vs_ai) {
+        const char *ai_label = app->player_is_white
+            ? engine_label(app->use_black_xboard, &app->black_engine)
+            : engine_label(app->use_white_xboard, &app->white_engine);
+        snprintf(mode_buf, sizeof(mode_buf),
+                 app->player_is_white ? "Player(W) vs %s(B)" : "Player(B) vs %s(W)",
+                 ai_label);
         mode = mode_buf;
     } else {
-        mode = app->player_vs_ai
-            ? (app->player_is_white ? "Player(W) vs BeatChess(B)" : "Player(B) vs BeatChess(W)")
-            : "BeatChess vs BeatChess";
+        const char *wl = engine_label(app->use_white_xboard, &app->white_engine);
+        const char *bl = engine_label(app->use_black_xboard, &app->black_engine);
+        snprintf(mode_buf, sizeof(mode_buf), "%s(W) vs %s(B)", wl, bl);
+        mode = mode_buf;
     }
     render_text(r, g_font_sm, mode, x, y, 160, 200, 230);
     y += 20;
@@ -947,17 +959,39 @@ static void draw_panel(App *app) {
     y += 26;
 
     long wm=(long)app->white_ms, bm=(long)app->black_ms;
-    snprintf(buf,sizeof(buf),"White: %ld:%02ld.%03ld",wm/60000,(wm%60000)/1000,wm%1000);
-    render_text(r, g_font_sm, buf, x, y, 220, 220, 220);
+
+    /* In blitz mode show engine clock countdowns; otherwise show elapsed times */
+    bool white_blitz = app->use_white_xboard && app->white_engine.time_limit_ms > 0;
+    bool black_blitz = app->use_black_xboard && app->black_engine.time_limit_ms > 0;
+
+    if (white_blitz) {
+        int rem = app->white_engine.time_remaining_ms;
+        int low = rem < 30000;  /* under 30s — show in red */
+        snprintf(buf, sizeof(buf), "White: %d:%02d.%d",
+                 rem/60000, (rem%60000)/1000, (rem%1000)/100);
+        render_text(r, g_font_sm, buf, x, y, low?255:220, low?80:220, low?80:220);
+    } else {
+        snprintf(buf,sizeof(buf),"White: %ld:%02ld.%03ld",wm/60000,(wm%60000)/1000,wm%1000);
+        render_text(r, g_font_sm, buf, x, y, 220, 220, 220);
+    }
     y += 16;
-    snprintf(buf,sizeof(buf),"Black: %ld:%02ld.%03ld",bm/60000,(bm%60000)/1000,bm%1000);
-    render_text(r, g_font_sm, buf, x, y, 180, 180, 180);
+
+    if (black_blitz) {
+        int rem = app->black_engine.time_remaining_ms;
+        int low = rem < 30000;
+        snprintf(buf, sizeof(buf), "Black: %d:%02d.%d",
+                 rem/60000, (rem%60000)/1000, (rem%1000)/100);
+        render_text(r, g_font_sm, buf, x, y, low?255:180, low?60:180, low?60:180);
+    } else {
+        snprintf(buf,sizeof(buf),"Black: %ld:%02ld.%03ld",bm/60000,(bm%60000)/1000,bm%1000);
+        render_text(r, g_font_sm, buf, x, y, 180, 180, 180);
+    }
     y += 22;
 
     if (app->ai_thinking) {
         render_text(r, g_font_sm, "AI thinking...", x, y, 100, 220, 255);
-        y += 18;
     }
+    y += 18;
 
     sdl_fill_rect(r, x, y, PANEL_W, 1, 70, 70, 90, 255);
     y += 8;
@@ -968,7 +1002,7 @@ static void draw_panel(App *app) {
         {x, y,      PANEL_W, 24, "N - New Game",        0, true},
         {x, y+28,   PANEL_W, 24, "U - Undo",            0, !game_over},
         {x, y+56,   PANEL_W, 24, "R - Resign",          0, !game_over && app->player_vs_ai},
-        {x, y+84,   PANEL_W, 24, "A - Toggle AI Mode",  0, true},
+        {x, y+84,   PANEL_W, 24, app->player_vs_ai ? "A - AI vs AI Mode" : "A - Player vs AI Mode", 0, true},
         {x, y+112,  PANEL_W, 24, "B - Swap Color",      0, true},
         {x, y+140,  PANEL_W, 24, "F - Flip Board",      0, true},
         {x, y+168,  PANEL_W, 24, g_music_on ? "M - Music: ON" : "M - Music: OFF", 0, true},
@@ -1381,7 +1415,7 @@ static void handle_menu_click(App *app, int px, int py) {
 
     /* Panel buttons */
     bool game_over = app->is_checkmate || app->is_stalemate || app->resigned;
-    int base_y = BOARD_MARGIN_Y + MENU_H + (int)((36+20+20+26+16+22+8));
+    int base_y = BOARD_MARGIN_Y + MENU_H + (int)((36+20+20+26+16+22+18+8));
     if (px >= PANEL_X && px < LOGICAL_W) {
         int bys[]={0,28,56,84,112,140,168,196,224};
         SDL_Keycode ks[]={SDLK_n,SDLK_u,SDLK_r,SDLK_a,SDLK_b,SDLK_f,SDLK_m,SDLK_QUESTION,SDLK_q};
@@ -1498,9 +1532,13 @@ static void update_ai(App *app, float dt) {
     bool has_move, is_thinking;
     int  depth = 0;
 
-    if (app->use_xboard) {
-        has_move    = xboard_has_move(&app->xboard);
-        is_thinking = xboard_is_thinking(&app->xboard);
+    bool white_turn  = (app->game.turn == WHITE);
+    bool use_xboard  = white_turn ? app->use_white_xboard : app->use_black_xboard;
+    XBoardEngine *eng = white_turn ? &app->white_engine : &app->black_engine;
+
+    if (use_xboard) {
+        has_move    = xboard_has_move(eng);
+        is_thinking = xboard_is_thinking(eng);
     } else {
 #if BEATCHESS_HAS_PTHREAD
         pthread_mutex_lock(&app->thinking.lock);
@@ -1523,8 +1561,8 @@ static void update_ai(App *app, float dt) {
     if (!should_play) return;
 
     ChessMove mv;
-    if (app->use_xboard)
-        mv = xboard_get_best_move_now(&app->xboard);
+    if (use_xboard)
+        mv = xboard_get_best_move_now(eng);
     else
         mv = chess_get_best_move_now(&app->thinking);
 
@@ -1548,6 +1586,8 @@ static void update_ai(App *app, float dt) {
         else                       app->black_captured[cap.type]++;
     }
     commit_move(app, mv.from_row, mv.from_col, mv.to_row, mv.to_col);
+    if (use_xboard)
+        xboard_move_made(eng, (int)(app->time_thinking * 1000));
     app->ai_thinking = false;
 }
 
@@ -1556,7 +1596,10 @@ static void update_ai(App *app, float dt) {
  * ============================================================================ */
 
 int main(int argc, char *argv[]) {
-    const char *cli_engine = NULL;
+    const char *cli_engine       = NULL;  /* --engine: sets both sides */
+    const char *cli_white_engine = NULL;  /* --white-engine */
+    const char *cli_black_engine = NULL;  /* --black-engine */
+    int         cli_time_ms      = 0;     /* --time <seconds>, 0 = fixed depth */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -1564,17 +1607,21 @@ int main(int argc, char *argv[]) {
                 "Usage: beatchess_sdl [OPTIONS]\n"
                 "\n"
                 "Options:\n"
-                "  --engine CMD   Use an external XBoard engine subprocess.\n"
-                "                 CMD is a shell command, e.g.:\n"
-                "                   --engine \"gnuchess --xboard\"\n"
-                "                   --engine \"crafty\"\n"
-                "                   --engine \"stockfish --xboard\"\n"
-                "                 Overrides the BEATCHESS_ENGINE environment variable.\n"
-                "                 Without this flag the built-in AI is used.\n"
-                "  -h, --help     Show this help and exit.\n"
+                "  --engine CMD         Use an XBoard engine for both sides.\n"
+                "  --white-engine CMD   Use an XBoard engine for White.\n"
+                "  --black-engine CMD   Use an XBoard engine for Black.\n"
+                "                       Any side not specified uses the built-in BeatChess AI.\n"
+                "                       Examples:\n"
+                "                         --black-engine \"gnuchess --xboard\"\n"
+                "                         --white-engine crafty --black-engine stockfish\n"
+                "  --time SECONDS       Per-side time budget for external engines (e.g. 300 for 5 min).\n"
+                "                       Without this, engines use a fixed search depth.\n"
+                "  -h, --help           Show this help and exit.\n"
                 "\n"
                 "Environment:\n"
-                "  BEATCHESS_ENGINE   Same as --engine (--engine takes precedence).\n"
+                "  BEATCHESS_ENGINE        Same as --engine.\n"
+                "  BEATCHESS_WHITE_ENGINE  Same as --white-engine.\n"
+                "  BEATCHESS_BLACK_ENGINE  Same as --black-engine.\n"
                 "\n"
                 "In-game keyboard shortcuts:\n"
                 "  N    New game\n"
@@ -1590,6 +1637,12 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (strcmp(argv[i], "--engine") == 0 && i+1 < argc) {
             cli_engine = argv[++i];
+        } else if (strcmp(argv[i], "--white-engine") == 0 && i+1 < argc) {
+            cli_white_engine = argv[++i];
+        } else if (strcmp(argv[i], "--black-engine") == 0 && i+1 < argc) {
+            cli_black_engine = argv[++i];
+        } else if (strcmp(argv[i], "--time") == 0 && i+1 < argc) {
+            cli_time_ms = atoi(argv[++i]) * 1000;
         } else {
             fprintf(stderr, "Unknown option: %s\nRun with --help for usage.\n", argv[i]);
             return 1;
@@ -1611,7 +1664,7 @@ int main(int argc, char *argv[]) {
     if (!app->window) { fprintf(stderr,"Window: %s\n",SDL_GetError()); return 1; }
 
     app->renderer = SDL_CreateRenderer(app->window, -1,
-                                        SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
+                                        SDL_RENDERER_ACCELERATED);
     if (!app->renderer) { fprintf(stderr,"Renderer: %s\n",SDL_GetError()); return 1; }
 
     /* Layout scales to actual window size */
@@ -1636,18 +1689,34 @@ int main(int argc, char *argv[]) {
     srand((unsigned)time(NULL));
     chess_init_thinking_state(&app->thinking);
 
-    /* Use an external XBoard engine only if explicitly requested via
-     * --engine on the command line or the BEATCHESS_ENGINE environment variable.
-     * Otherwise the built-in minimax AI is used. */
-    app->use_xboard = false;
+    /* Per-side engine init.
+     * Priority: --white/black-engine > --engine > BEATCHESS_WHITE/BLACK_ENGINE > BEATCHESS_ENGINE.
+     * Sides not given an external engine use the built-in BeatChess AI. */
+    app->use_white_xboard = false;
+    app->use_black_xboard = false;
     {
-        const char *engine_cmd = cli_engine ? cli_engine : getenv("BEATCHESS_ENGINE");
-        if (engine_cmd) {
-            if (xboard_engine_init(&app->xboard, engine_cmd)) {
-                app->use_xboard = true;
-                fprintf(stderr, "Using external engine: %s\n", engine_cmd);
+        const char *both  = cli_engine       ? cli_engine       : getenv("BEATCHESS_ENGINE");
+        const char *white = cli_white_engine ? cli_white_engine : getenv("BEATCHESS_WHITE_ENGINE");
+        const char *black = cli_black_engine ? cli_black_engine : getenv("BEATCHESS_BLACK_ENGINE");
+        if (!white) white = both;
+        if (!black) black = both;
+
+        if (white) {
+            if (xboard_engine_init(&app->white_engine, white)) {
+                app->use_white_xboard = true;
+                if (cli_time_ms > 0) xboard_engine_set_time(&app->white_engine, cli_time_ms);
+                fprintf(stderr, "White engine: %s\n", white);
             } else {
-                fprintf(stderr, "External engine unavailable (%s), using built-in AI\n", engine_cmd);
+                fprintf(stderr, "White engine unavailable (%s), using BeatChess\n", white);
+            }
+        }
+        if (black) {
+            if (xboard_engine_init(&app->black_engine, black)) {
+                app->use_black_xboard = true;
+                if (cli_time_ms > 0) xboard_engine_set_time(&app->black_engine, cli_time_ms);
+                fprintf(stderr, "Black engine: %s\n", black);
+            } else {
+                fprintf(stderr, "Black engine unavailable (%s), using BeatChess\n", black);
             }
         }
     }
@@ -1786,14 +1855,36 @@ int main(int argc, char *argv[]) {
 
             update_cursor(app);
             update_ai(app, dt);
+
+            /* Blitz countdown: tick the clock for the side to move */
+            if (app->use_white_xboard || app->use_black_xboard) {
+                bool wt = (app->game.turn == WHITE);
+                XBoardEngine *clk_eng = wt ? &app->white_engine : &app->black_engine;
+                bool clk_xboard = wt ? app->use_white_xboard : app->use_black_xboard;
+                if (clk_xboard && clk_eng->time_limit_ms > 0 && app->ai_thinking) {
+                    clk_eng->time_remaining_ms -= (int)(dt * 1000);
+                    if (clk_eng->time_remaining_ms < 0) clk_eng->time_remaining_ms = 0;
+                }
+            }
         }
 
         draw_frame(app);
+
+        /* Cap at ~60 fps without VSYNC so event loop stays responsive */
+        Uint32 frame_ms = SDL_GetTicks() - now;
+        if (frame_ms < 16) SDL_Delay(16 - frame_ms);
     }
 
     SDL_StopTextInput();
-    if (app->use_xboard)
-        xboard_engine_quit(&app->xboard);
+    /* Cancel the built-in AI thread immediately so quit doesn't hang
+     * waiting for a long minimax search to finish. */
+#if BEATCHESS_HAS_PTHREAD
+    if (app->thinking.thinking && app->thinking.thread) {
+        pthread_cancel(app->thinking.thread);
+    }
+#endif
+    if (app->use_white_xboard) xboard_engine_quit(&app->white_engine);
+    if (app->use_black_xboard) xboard_engine_quit(&app->black_engine);
     chess_cleanup_thinking_state(&app->thinking);
     audio_shutdown();
     sdl_destroy_chess_pieces();

@@ -7,8 +7,6 @@
 
 #include "xboard_engine.h"
 
-#include <SDL2/SDL.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -177,7 +175,7 @@ static void *reader_thread_fn(void *arg) {
         if (mv_token) {
             ChessMove mv;
             if (xboard_parse_move(mv_token, &mv)) {
-                SDL_Log("[engine] move: %s", mv_token);
+                fprintf(stderr, "[engine] move: %s\n", mv_token);
                 pthread_mutex_lock(&eng->lock);
                 eng->best_move = mv;
                 eng->has_move  = true;
@@ -192,9 +190,9 @@ static void *reader_thread_fn(void *arg) {
             char *p = line;
             while (*p == ' ') p++;
             if (*p >= '0' && *p <= '9')
-                SDL_Log("[engine thinking] %s", line);
+                fprintf(stderr, "[engine thinking] %s\n", line);
             else
-                SDL_Log("[engine] %s", line);
+                fprintf(stderr, "[engine] %s\n", line);
         }
         /* Parse engine name from protover 2 handshake:
          *   feature myname="GNU Chess 6.2.9"
@@ -287,8 +285,7 @@ bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
     engine_send(eng, "xboard");
     engine_send(eng, "protover 2");
     engine_send(eng, "post");            /* enable thinking output           */
-    /* Tell the engine not to use time controls — we drive it manually */
-    engine_send(eng, "level 0 5 0");
+    /* Time control set later via xboard_engine_set_time(); default to fixed depth */
     engine_send(eng, "sd " XBOARD_DEFAULT_DEPTH_STR);
     engine_send(eng, "new");
     engine_send(eng, "force");   /* engine won't move until we say "go" */
@@ -323,6 +320,30 @@ void xboard_engine_set_depth(XBoardEngine *eng, int depth) {
     engine_sendf(eng, "sd %d", depth);
 }
 
+void xboard_engine_set_time(XBoardEngine *eng, int total_ms) {
+    eng->time_limit_ms    = total_ms;
+    eng->time_remaining_ms = total_ms;
+    if (total_ms > 0) {
+        /* "level moves minutes increment" — game in N minutes, 0 increment */
+        int minutes = total_ms / 60000;
+        int seconds = (total_ms % 60000) / 1000;
+        if (seconds > 0)
+            engine_sendf(eng, "level 0 %d:%02d 0", minutes, seconds);
+        else
+            engine_sendf(eng, "level 0 %d 0", minutes);
+    } else {
+        /* Back to fixed depth, no time control */
+        engine_sendf(eng, "sd %d", XBOARD_DEFAULT_DEPTH);
+    }
+}
+
+void xboard_move_made(XBoardEngine *eng, int elapsed_ms) {
+    if (eng->time_limit_ms > 0) {
+        eng->time_remaining_ms -= elapsed_ms;
+        if (eng->time_remaining_ms < 0) eng->time_remaining_ms = 0;
+    }
+}
+
 void xboard_start_thinking(XBoardEngine *eng, ChessGameState *game) {
     if (!eng->engine_ok) return;
 
@@ -337,6 +358,11 @@ void xboard_start_thinking(XBoardEngine *eng, ChessGameState *game) {
     chess_game_to_fen(game, fen, sizeof(fen));
     engine_send(eng, "force");          /* halt engine if it was pondering   */
     engine_sendf(eng, "setboard %s", fen);
+    if (eng->time_limit_ms > 0) {
+        /* Tell engine how much time remains (in centiseconds) */
+        int cs = eng->time_remaining_ms / 10;
+        engine_sendf(eng, "time %d", cs);
+    }
     engine_send(eng, "go");             /* engine plays the side to move      */
 }
 
