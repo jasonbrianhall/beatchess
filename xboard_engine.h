@@ -25,6 +25,8 @@
  * XBoardEngine state
  * ============================================================================ */
 
+typedef enum { ENGINE_PROTOCOL_XBOARD, ENGINE_PROTOCOL_UCI } EngineProtocol;
+
 typedef struct {
     FILE   *to_engine;
     FILE   *from_engine;
@@ -42,10 +44,12 @@ typedef struct {
     bool           engine_ok;
 
     char engine_cmd[256];
-    char engine_name[128];   /* from "feature myname=..." handshake */
+    char engine_name[128];   /* from "feature myname=..." or "id name ..." */
 
     int  time_limit_ms;      /* per-side time budget in ms; 0 = fixed depth */
-    int  time_remaining_ms;  /* tracked by us, sent to engine before each go */
+    int  time_remaining_ms;
+
+    EngineProtocol protocol;
 } XBoardEngine;
 
 /* ============================================================================
@@ -53,6 +57,7 @@ typedef struct {
  * ============================================================================ */
 
 bool      xboard_engine_init(XBoardEngine *eng, const char *engine_cmd);
+bool      xboard_engine_init_uci(XBoardEngine *eng, const char *engine_cmd);
 void      xboard_engine_quit(XBoardEngine *eng);
 void      xboard_engine_set_depth(XBoardEngine *eng, int depth);
 void      xboard_engine_set_time(XBoardEngine *eng, int total_ms);  /* 0 = fixed depth */

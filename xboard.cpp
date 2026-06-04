@@ -185,35 +185,53 @@ static void *reader_thread_fn(void *arg) {
                 pthread_cond_signal(&eng->cond);
                 pthread_mutex_unlock(&eng->lock);
             }
-        } else {
-            /* Log thinking lines: XBoard thinking output starts with a
-             * numeric depth field, e.g. " 4  +42  12  98234  e2e4 e7e5 ..."
-             * Also log any other non-empty line for visibility. */
-            char *p = line;
-            while (*p == ' ') p++;
-            if (*p >= '0' && *p <= '9')
-                SDL_Log("[engine thinking] %s", line);
-            else
-                SDL_Log("[engine] %s", line);
-        }
-        /* Parse engine name from protover 2 handshake:
-         *   feature myname="GNU Chess 6.2.9"
-         *   feature myname=Crafty */
-        const char *fn = strstr(line, "myname=");
-        if (fn) {
-            fn += 7;
-            char name[128] = {0};
-            int ni = 0;
-            if (*fn == '"') {
-                fn++;
-                while (*fn && *fn != '"' && ni < 127) name[ni++] = *fn++;
-            } else {
-                while (*fn && *fn != ' ' && ni < 127) name[ni++] = *fn++;
-            }
-            if (name[0]) {
+        } else if (eng->protocol == ENGINE_PROTOCOL_UCI) {
+            /* UCI: "bestmove e2e4 [ponder ...]" */
+            if (strncmp(line, "bestmove ", 9) == 0) {
+                const char *tok = line + 9;
+                /* skip "(none)" which stockfish emits on game over */
+                if (strncmp(tok, "(none)", 6) != 0) {
+                    ChessMove mv;
+                    if (xboard_parse_move(tok, &mv)) {
+                        SDL_Log("[engine] bestmove: %s", tok);
+                        pthread_mutex_lock(&eng->lock);
+                        eng->best_move = mv;
+                        eng->has_move  = true;
+                        eng->thinking  = false;
+                        pthread_cond_signal(&eng->cond);
+                        pthread_mutex_unlock(&eng->lock);
+                    }
+                }
+            } else if (strncmp(line, "id name ", 8) == 0) {
                 pthread_mutex_lock(&eng->lock);
-                strncpy(eng->engine_name, name, sizeof(eng->engine_name) - 1);
+                strncpy(eng->engine_name, line + 8, sizeof(eng->engine_name) - 1);
                 pthread_mutex_unlock(&eng->lock);
+                SDL_Log("[engine] %s", line);
+            } else if (strncmp(line, "info ", 5) == 0) {
+                SDL_Log("[engine thinking] %s", line);
+            } else {
+                SDL_Log("[engine] %s", line);
+            }
+        }
+
+        /* XBoard: parse "feature myname=..." from protover 2 handshake */
+        if (eng->protocol == ENGINE_PROTOCOL_XBOARD) {
+            const char *fn = strstr(line, "myname=");
+            if (fn) {
+                fn += 7;
+                char name[128] = {0};
+                int ni = 0;
+                if (*fn == '"') {
+                    fn++;
+                    while (*fn && *fn != '"' && ni < 127) name[ni++] = *fn++;
+                } else {
+                    while (*fn && *fn != ' ' && ni < 127) name[ni++] = *fn++;
+                }
+                if (name[0]) {
+                    pthread_mutex_lock(&eng->lock);
+                    strncpy(eng->engine_name, name, sizeof(eng->engine_name) - 1);
+                    pthread_mutex_unlock(&eng->lock);
+                }
             }
         }
     }
@@ -279,23 +297,14 @@ bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
     }
 
     eng->engine_ok = true;
+    eng->protocol  = ENGINE_PROTOCOL_XBOARD;
 
     pthread_mutex_init(&eng->lock, NULL);
     pthread_cond_init(&eng->cond, NULL);
 
-    /* XBoard handshake */
-    engine_send(eng, "xboard");
-    engine_send(eng, "protover 2");
-    engine_send(eng, "post");            /* enable thinking output           */
-    /* Time control set later via xboard_engine_set_time(); default to fixed depth */
-    engine_send(eng, "sd " XBOARD_DEFAULT_DEPTH_STR);
-    engine_send(eng, "new");
-    engine_send(eng, "force");   /* engine won't move until we say "go" */
-
-    /* Start background reader thread */
+    /* Start reader thread before handshake so feature responses are drained */
     if (pthread_create(&eng->reader_thread, NULL, reader_thread_fn, eng) != 0) {
         perror("xboard_engine_init: pthread_create");
-        engine_send(eng, "quit");
         fclose(eng->to_engine);
         fclose(eng->from_engine);
         kill(pid, SIGKILL);
@@ -303,13 +312,24 @@ bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
         return false;
     }
 
+    /* XBoard handshake */
+    engine_send(eng, "xboard");
+    engine_send(eng, "protover 2");
+    engine_send(eng, "post");
+    engine_send(eng, "sd " XBOARD_DEFAULT_DEPTH_STR);
+    engine_send(eng, "new");
+    engine_send(eng, "force");
+
     return true;
 }
 
 void xboard_engine_quit(XBoardEngine *eng) {
     if (!eng->engine_ok) return;
     eng->engine_ok = false;
-    engine_send(eng, "quit");
+    if (eng->protocol == ENGINE_PROTOCOL_UCI)
+        engine_send(eng, "quit");
+    else
+        engine_send(eng, "quit");
     fclose(eng->to_engine);   eng->to_engine   = NULL;
     fclose(eng->from_engine); eng->from_engine = NULL;
     pthread_join(eng->reader_thread, NULL);
@@ -318,15 +338,67 @@ void xboard_engine_quit(XBoardEngine *eng) {
     pthread_cond_destroy(&eng->cond);
 }
 
+bool xboard_engine_init_uci(XBoardEngine *eng, const char *engine_cmd) {
+    /* Spawn subprocess identically to xboard_engine_init */
+    memset(eng, 0, sizeof(*eng));
+    strncpy(eng->engine_cmd, engine_cmd, sizeof(eng->engine_cmd) - 1);
+    eng->engine_ok = false;
+    eng->protocol  = ENGINE_PROTOCOL_UCI;
+
+    int to_child[2], from_child[2];
+    if (pipe(to_child) < 0 || pipe(from_child) < 0) return false;
+
+    pid_t pid = fork();
+    if (pid < 0) { close(to_child[0]); close(to_child[1]); close(from_child[0]); close(from_child[1]); return false; }
+
+    if (pid == 0) {
+        dup2(to_child[0],   STDIN_FILENO);
+        dup2(from_child[1], STDOUT_FILENO);
+        close(to_child[1]); close(from_child[0]);
+        FILE *devnull = fopen("/dev/null", "w");
+        if (devnull) dup2(fileno(devnull), STDERR_FILENO);
+        execl("/bin/sh", "sh", "-c", engine_cmd, (char *)NULL);
+        _exit(127);
+    }
+
+    close(to_child[0]); close(from_child[1]);
+    eng->child_pid   = pid;
+    eng->to_engine   = fdopen(to_child[1],   "w");
+    eng->from_engine = fdopen(from_child[0], "r");
+    if (!eng->to_engine || !eng->from_engine) { kill(pid, SIGKILL); return false; }
+
+    eng->engine_ok = true;
+    pthread_mutex_init(&eng->lock, NULL);
+    pthread_cond_init(&eng->cond, NULL);
+
+    /* Start reader thread BEFORE handshake so Stockfish's stdout is drained
+     * immediately — otherwise the pipe buffer fills and we deadlock. */
+    if (pthread_create(&eng->reader_thread, NULL, reader_thread_fn, eng) != 0) {
+        fclose(eng->to_engine); fclose(eng->from_engine);
+        kill(pid, SIGKILL);
+        eng->engine_ok = false;
+        return false;
+    }
+
+    /* UCI handshake — reader thread drains the responses asynchronously */
+    engine_send(eng, "uci");
+    engine_send(eng, "isready");
+    engine_send(eng, "ucinewgame");
+    return true;
+}
+
 void xboard_engine_set_depth(XBoardEngine *eng, int depth) {
     engine_sendf(eng, "sd %d", depth);
 }
 
 void xboard_engine_set_time(XBoardEngine *eng, int total_ms) {
-    eng->time_limit_ms    = total_ms;
+    eng->time_limit_ms     = total_ms;
     eng->time_remaining_ms = total_ms;
+    if (eng->protocol == ENGINE_PROTOCOL_UCI) {
+        /* UCI uses wtime/btime in go command — nothing to send now */
+        return;
+    }
     if (total_ms > 0) {
-        /* "level moves minutes increment" — game in N minutes, 0 increment */
         int minutes = total_ms / 60000;
         int seconds = (total_ms % 60000) / 1000;
         if (seconds > 0)
@@ -334,7 +406,6 @@ void xboard_engine_set_time(XBoardEngine *eng, int total_ms) {
         else
             engine_sendf(eng, "level 0 %d 0", minutes);
     } else {
-        /* Back to fixed depth, no time control */
         engine_sendf(eng, "sd %d", XBOARD_DEFAULT_DEPTH);
     }
 }
@@ -350,22 +421,36 @@ void xboard_start_thinking(XBoardEngine *eng, ChessGameState *game) {
     if (!eng->engine_ok) return;
 
     pthread_mutex_lock(&eng->lock);
-    eng->has_move = false;
-    eng->thinking = true;
+    eng->has_move  = false;
+    eng->thinking  = true;
     eng->last_game = *game;
     pthread_mutex_unlock(&eng->lock);
 
-    /* Use "setboard <FEN>" to sync position, then "go" */
     char fen[128];
     chess_game_to_fen(game, fen, sizeof(fen));
-    engine_send(eng, "force");          /* halt engine if it was pondering   */
-    engine_sendf(eng, "setboard %s", fen);
-    if (eng->time_limit_ms > 0) {
-        /* Tell engine how much time remains (in centiseconds) */
-        int cs = eng->time_remaining_ms / 10;
-        engine_sendf(eng, "time %d", cs);
+
+    if (eng->protocol == ENGINE_PROTOCOL_UCI) {
+        engine_sendf(eng, "position fen %s", fen);
+        if (eng->time_limit_ms > 0) {
+            int ms = eng->time_remaining_ms;
+            /* wtime/btime: pass remaining time for the side to move */
+            if (game->turn == WHITE)
+                engine_sendf(eng, "go wtime %d btime %d", ms, ms);
+            else
+                engine_sendf(eng, "go wtime %d btime %d", ms, ms);
+        } else {
+            engine_sendf(eng, "go depth %d", XBOARD_DEFAULT_DEPTH);
+        }
+    } else {
+        /* XBoard protocol */
+        engine_send(eng, "force");
+        engine_sendf(eng, "setboard %s", fen);
+        if (eng->time_limit_ms > 0) {
+            int cs = eng->time_remaining_ms / 10;
+            engine_sendf(eng, "time %d", cs);
+        }
+        engine_send(eng, "go");
     }
-    engine_send(eng, "go");             /* engine plays the side to move      */
 }
 
 bool xboard_has_move(XBoardEngine *eng) {

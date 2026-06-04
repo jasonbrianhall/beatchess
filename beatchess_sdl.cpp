@@ -612,18 +612,19 @@ static const char *resolve_engine_cmd(const char *binary, const char *args) {
 
 /* Engine whitelist — binary name, extra args, display name */
 typedef struct {
-    const char *name;      /* display name */
-    const char *binary;    /* executable name (no extension, no path) */
-    const char *args;      /* extra arguments */
-    const char *cmd_cache; /* resolved at startup, NULL until then */
-    bool        available; /* binary found (or built-in) */
+    const char     *name;
+    const char     *binary;
+    const char     *args;
+    const char     *cmd_cache;
+    bool            available;
+    EngineProtocol  protocol;
 } EngineEntry;
 
 static EngineEntry ENGINE_LIST[] = {
-    { "BeatChess", NULL,         NULL,       NULL, true  },  /* always available */
-    { "GNU Chess", "gnuchess",   "--xboard", NULL, false },
-    { "Stockfish", "stockfish",  NULL,       NULL, false },
-    { "Crafty",    "crafty",     NULL,       NULL, false },
+    { "BeatChess", NULL,        NULL, NULL, true,  ENGINE_PROTOCOL_XBOARD },
+    { "GNU Chess", "gnuchess",  "--xboard", NULL, false, ENGINE_PROTOCOL_XBOARD },
+    { "Stockfish", "stockfish", NULL, NULL, false, ENGINE_PROTOCOL_UCI    },
+    { "Crafty",    "crafty",    NULL, NULL, false, ENGINE_PROTOCOL_XBOARD },
 };
 static const int ENGINE_COUNT = 4;
 
@@ -680,7 +681,10 @@ static void apply_engine_selection(App *app) {
     const char *bcmd = engine_cmd(app->engine_sel_black);
 
     if (wcmd) {
-        if (xboard_engine_init(&app->white_engine, wcmd)) {
+        bool ok = (ENGINE_LIST[app->engine_sel_white].protocol == ENGINE_PROTOCOL_UCI)
+                  ? xboard_engine_init_uci(&app->white_engine, wcmd)
+                  : xboard_engine_init(&app->white_engine, wcmd);
+        if (ok) {
             app->use_white_xboard = true;
             if (app->engine_time_limit_ms > 0)
                 xboard_engine_set_time(&app->white_engine, app->engine_time_limit_ms);
@@ -689,7 +693,10 @@ static void apply_engine_selection(App *app) {
         }
     }
     if (bcmd) {
-        if (xboard_engine_init(&app->black_engine, bcmd)) {
+        bool ok = (ENGINE_LIST[app->engine_sel_black].protocol == ENGINE_PROTOCOL_UCI)
+                  ? xboard_engine_init_uci(&app->black_engine, bcmd)
+                  : xboard_engine_init(&app->black_engine, bcmd);
+        if (ok) {
             app->use_black_xboard = true;
             if (app->engine_time_limit_ms > 0)
                 xboard_engine_set_time(&app->black_engine, app->engine_time_limit_ms);
