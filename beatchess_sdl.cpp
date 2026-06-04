@@ -347,6 +347,7 @@ typedef struct {
 
     /* Board */
     bool  board_flipped;
+    int   board_color_scheme;  /* index into BOARD_SCHEMES table */
     int   selected_row, selected_col;
     bool  piece_selected;
     int   last_from_row, last_from_col;
@@ -416,6 +417,8 @@ typedef struct {
     int  engine_sel_white;   /* index into ENGINE_LIST */
     int  engine_sel_black;
     int  engine_time_limit_ms;  /* 0 = unlimited/fixed depth, else per-side ms */
+    int  human_time_remaining_ms; /* countdown for the human side in blitz mode */
+    int  ai_time_remaining_ms;    /* countdown for the built-in AI side in blitz mode */
 
     bool running;
 } App;
@@ -720,6 +723,10 @@ static void game_new(App *app) {
     app->move_count      = 0;
     app->white_ms        = 0;
     app->black_ms        = 0;
+    app->human_time_remaining_ms = app->engine_time_limit_ms; /* reset human clock */
+    app->ai_time_remaining_ms    = app->engine_time_limit_ms; /* reset built-in AI clock */
+    if (app->use_white_xboard) app->white_engine.time_remaining_ms = app->engine_time_limit_ms;
+    if (app->use_black_xboard) app->black_engine.time_remaining_ms = app->engine_time_limit_ms;
     app->move_start_ms   = SDL_GetTicks();
     app->ai_thinking     = false;
     app->time_thinking   = 0.0f;
@@ -938,8 +945,78 @@ static void call_flag(App *app) {
  * Drawing — board
  * ============================================================================ */
 
+struct BoardColorScheme {
+    const char *name;
+    Uint8 light_r, light_g, light_b;
+    Uint8 dark_r,  dark_g,  dark_b;
+};
+static const BoardColorScheme BOARD_SCHEMES[] = {
+    /* ── Classic wood tones ── */
+    { "Classic",        240, 217, 181,   181, 136,  99 },
+    { "Walnut",         245, 230, 200,   130,  80,  50 },
+    { "Maple",          255, 240, 210,   160, 100,  50 },
+    { "Ebony",          230, 220, 200,    40,  35,  30 },
+    { "Rosewood",       240, 210, 195,   150,  60,  60 },
+    /* ── Cool blues & greens ── */
+    { "Green/Cream",    238, 238, 210,   118, 150,  86 },
+    { "Teal/Sand",      220, 230, 220,    50, 140, 130 },
+    { "Ocean",          200, 230, 245,    30,  90, 160 },
+    { "Midnight",       180, 200, 230,    20,  30,  80 },
+    { "Forest",         210, 230, 200,    40, 100,  50 },
+    { "Mint",           200, 240, 225,    40, 160, 120 },
+    { "Arctic",         220, 240, 255,    80, 140, 190 },
+    /* ── Warm & fiery ── */
+    { "Sunset",         255, 210, 140,   210,  80,  30 },
+    { "Ember",          250, 200, 150,   180,  60,  20 },
+    { "Lava",           255, 180, 100,   200,  40,  10 },
+    { "Desert",         245, 225, 170,   190, 130,  60 },
+    { "Autumn",         240, 200, 130,   160,  80,  30 },
+    /* ── Bold two-color combos ── */
+    { "Cyan/Magenta",     0, 220, 220,   180,   0, 180 },
+    { "Red/Blue",       220,  60,  60,    40,  80, 200 },
+    { "Green/Orange",   255, 200, 100,    34, 139,  34 },
+    { "Yellow/Purple",  240, 230,  50,   120,  30, 160 },
+    { "Pink/Teal",      255, 150, 180,    20, 160, 150 },
+    { "Lime/Indigo",    180, 255,  80,    60,  30, 180 },
+    { "Orange/Navy",    255, 160,  50,    20,  40, 120 },
+    { "Coral/Slate",    255, 130, 110,    80, 100, 130 },
+    { "Gold/Crimson",   255, 210,  50,   160,  20,  40 },
+    { "Sky/Brown",      160, 210, 255,   120,  70,  30 },
+    /* ── Neon / vibrant ── */
+    { "Neon Green/Violet", 50, 255, 120,  200,  50, 255 },
+    { "Ice/Fire",       100, 200, 255,   255,  80,  20 },
+    { "Electric",         0, 200, 255,   255, 100,   0 },
+    { "Acid",           200, 255,   0,   100,   0, 200 },
+    { "Plasma",         255,  50, 200,    50, 200, 255 },
+    { "Toxic",          150, 255,  50,    50,  80,  20 },
+    { "Hot Pink/Cyan",  255,  80, 180,     0, 200, 220 },
+    /* ── Monochrome & muted ── */
+    { "Graphite",       200, 200, 200,    80,  80,  80 },
+    { "Slate",          190, 205, 215,    90, 110, 125 },
+    { "Sepia",          240, 220, 185,   140, 100,  65 },
+    { "Lavender",       220, 210, 240,   130, 100, 180 },
+    { "Blush",          245, 210, 215,   180, 110, 120 },
+    { "Steel",          210, 220, 230,   100, 120, 145 },
+    /* ── High contrast ── */
+    { "Black/White",    240, 240, 240,    30,  30,  30 },
+    { "Black/Gold",     220, 180,  40,    20,  20,  20 },
+    { "Black/Red",      220,  50,  50,    20,  20,  20 },
+    { "Black/Cyan",       0, 220, 220,    20,  20,  20 },
+    { "Black/Lime",     160, 240,  50,    20,  20,  20 },
+    /* ── Pastels ── */
+    { "Pastel Pink",    255, 210, 220,   220, 160, 175 },
+    { "Pastel Blue",    200, 220, 255,   150, 175, 220 },
+    { "Pastel Green",   200, 240, 210,   140, 200, 155 },
+    { "Pastel Yellow",  255, 250, 200,   210, 200, 130 },
+    { "Pastel Purple",  220, 200, 240,   170, 140, 210 },
+    { "Cotton Candy",   255, 200, 230,   180, 220, 255 },
+};
+static const int BOARD_SCHEME_COUNT = 51;
+
 static void draw_board(App *app) {
     SDL_Renderer *r = app->renderer;
+
+    const BoardColorScheme &sc = BOARD_SCHEMES[app->board_color_scheme % BOARD_SCHEME_COUNT];
 
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
@@ -948,8 +1025,8 @@ static void draw_board(App *app) {
 
             /* Base colour */
             bool light = ((row + col) % 2 == 0);
-            if (light) sdl_fill_rect(r, rc.x, rc.y, rc.w, rc.h, 240, 217, 181, 255);
-            else        sdl_fill_rect(r, rc.x, rc.y, rc.w, rc.h, 181, 136,  99, 255);
+            if (light) sdl_fill_rect(r, rc.x, rc.y, rc.w, rc.h, sc.light_r, sc.light_g, sc.light_b, 255);
+            else        sdl_fill_rect(r, rc.x, rc.y, rc.w, rc.h, sc.dark_r,  sc.dark_g,  sc.dark_b,  255);
 
             /* Last move highlight */
             if (app->has_last_move &&
@@ -1156,13 +1233,26 @@ static void draw_panel(App *app) {
 
     long wm=(long)app->white_ms, bm=(long)app->black_ms;
 
-    /* In blitz mode show engine clock countdowns; otherwise show elapsed times */
-    bool white_blitz = app->use_white_xboard && app->white_engine.time_limit_ms > 0;
-    bool black_blitz = app->use_black_xboard && app->black_engine.time_limit_ms > 0;
+    /* In blitz mode show countdowns; otherwise show elapsed times.
+     * Human side uses human_time_remaining_ms; engine side uses engine's own clock. */
+    bool white_blitz = app->engine_time_limit_ms > 0 &&
+                       (app->use_white_xboard || app->player_vs_ai);
+    bool black_blitz = app->engine_time_limit_ms > 0 &&
+                       (app->use_black_xboard || app->player_vs_ai);
+
+    /* Determine which side the human plays (only relevant in PvA) */
+    bool human_is_white = app->player_vs_ai && app->player_is_white;
+    bool human_is_black = app->player_vs_ai && !app->player_is_white;
 
     if (white_blitz) {
-        int rem = app->white_engine.time_remaining_ms;
-        int low = rem < 30000;  /* under 30s — show in red */
+        int rem;
+        if (human_is_white && !app->use_white_xboard)
+            rem = app->human_time_remaining_ms;   /* human plays white, built-in */
+        else if (app->use_white_xboard)
+            rem = app->white_engine.time_remaining_ms; /* xboard engine plays white */
+        else
+            rem = app->ai_time_remaining_ms;       /* built-in AI plays white */
+        int low = rem < 30000;
         snprintf(buf, sizeof(buf), "White: %d:%02d.%d",
                  rem/60000, (rem%60000)/1000, (rem%1000)/100);
         render_text(r, g_font_sm, buf, x, y, low?255:220, low?80:220, low?80:220);
@@ -1173,7 +1263,13 @@ static void draw_panel(App *app) {
     y += 16;
 
     if (black_blitz) {
-        int rem = app->black_engine.time_remaining_ms;
+        int rem;
+        if (human_is_black && !app->use_black_xboard)
+            rem = app->human_time_remaining_ms;   /* human plays black, built-in */
+        else if (app->use_black_xboard)
+            rem = app->black_engine.time_remaining_ms; /* xboard engine plays black */
+        else
+            rem = app->ai_time_remaining_ms;       /* built-in AI plays black */
         int low = rem < 30000;
         snprintf(buf, sizeof(buf), "Black: %d:%02d.%d",
                  rem/60000, (rem%60000)/1000, (rem%1000)/100);
@@ -1332,6 +1428,8 @@ static void draw_help_screen(App *app) {
         "A          Toggle AI vs AI / Player vs AI",
         "B          Swap player colour",
         "E          Select chess engines",
+        "F          Flip board",
+        "F7 / F8    Previous / Next board color theme",
         "M          Toggle sound on/off",
         "?          Show this help",
         "Q / Esc    Quit",
@@ -1655,6 +1753,15 @@ static void handle_game_key(App *app, SDL_Keycode key) {
         case SDLK_SLASH:
         case SDLK_QUESTION:
             app->screen = SCREEN_HELP;
+            break;
+        case SDLK_f:
+            app->board_flipped = !app->board_flipped;
+            break;
+        case SDLK_F7:
+            app->board_color_scheme = (app->board_color_scheme - 1 + BOARD_SCHEME_COUNT) % BOARD_SCHEME_COUNT;
+            break;
+        case SDLK_F8:
+            app->board_color_scheme = (app->board_color_scheme + 1) % BOARD_SCHEME_COUNT;
             break;
         case SDLK_q:
         case SDLK_ESCAPE:
@@ -2023,7 +2130,7 @@ int main(int argc, char *argv[]) {
                 "  R    Resign\n"
                 "  A    Toggle AI vs AI / Player vs AI\n"
                 "  B    Swap player colour\n"
-                "  F    Flip board\n"
+                "  F    Flip board   F7/F8 Prev/Next color theme\n"
                 "  M    Toggle sound\n"
                 "  ?    In-game help\n"
                 "  Q    Quit\n"
@@ -2262,14 +2369,36 @@ int main(int argc, char *argv[]) {
             update_cursor(app);
             update_ai(app, dt);
 
-            /* Blitz countdown: tick the clock for the side to move */
-            if (app->use_white_xboard || app->use_black_xboard) {
-                bool wt = (app->game.turn == WHITE);
-                XBoardEngine *clk_eng = wt ? &app->white_engine : &app->black_engine;
-                bool clk_xboard = wt ? app->use_white_xboard : app->use_black_xboard;
-                if (clk_xboard && clk_eng->time_limit_ms > 0 && app->ai_thinking) {
-                    clk_eng->time_remaining_ms -= (int)(dt * 1000);
-                    if (clk_eng->time_remaining_ms < 0) clk_eng->time_remaining_ms = 0;
+            /* Blitz countdown: tick the clock for whichever side is to move */
+            if (app->engine_time_limit_ms > 0 &&
+                !app->is_checkmate && !app->is_stalemate && !app->resigned &&
+                !app->is_animating && !app->awaiting_promotion) {
+
+                bool white_turn = (app->game.turn == WHITE);
+                bool human_turn = app->player_vs_ai &&
+                                  ((white_turn && app->player_is_white) ||
+                                   (!white_turn && !app->player_is_white));
+
+                int tick_ms = (int)(dt * 1000.0f);
+                if (tick_ms < 1) tick_ms = 1;  /* always tick at least 1ms per frame */
+
+                if (human_turn) {
+                    /* Human is thinking — tick their personal countdown */
+                    app->human_time_remaining_ms -= tick_ms;
+                    if (app->human_time_remaining_ms < 0) app->human_time_remaining_ms = 0;
+                } else {
+                    /* AI is thinking — xboard engine or built-in */
+                    XBoardEngine *clk_eng = white_turn ? &app->white_engine : &app->black_engine;
+                    bool clk_xboard = white_turn ? app->use_white_xboard : app->use_black_xboard;
+                    if (clk_xboard && clk_eng->time_limit_ms > 0) {
+                        /* xboard engine: tick its own clock */
+                        clk_eng->time_remaining_ms -= tick_ms;
+                        if (clk_eng->time_remaining_ms < 0) clk_eng->time_remaining_ms = 0;
+                    } else {
+                        /* built-in AI: tick the shared ai clock */
+                        app->ai_time_remaining_ms -= tick_ms;
+                        if (app->ai_time_remaining_ms < 0) app->ai_time_remaining_ms = 0;
+                    }
                 }
             }
         }
