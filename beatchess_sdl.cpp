@@ -1401,10 +1401,10 @@ static void handle_menu_click(App *app, int px, int py) {
         app->file_menu_open=false; return;
     }
     if (app->help_menu_open && px>=(int)(60*g_scale) && px<(int)(60*g_scale)+(int)(180*g_scale)) {
-        int iy=MENU_H;
+        int iy=MENU_H, ih=(int)(22*g_scale);
         for (int i=0;i<2;i++){
-            if (py>=iy&&py<iy+22){app->help_menu_open=false;if(i==0)app->screen=SCREEN_HELP;else app->screen=SCREEN_ABOUT;return;}
-            iy+=22;
+            if (py>=iy&&py<iy+ih){app->help_menu_open=false;if(i==0)app->screen=SCREEN_HELP;else app->screen=SCREEN_ABOUT;return;}
+            iy+=ih;
         }
         app->help_menu_open=false; return;
     }
