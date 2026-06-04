@@ -775,12 +775,18 @@ static void commit_move(App *app, int fr, int fc, int tr, int tc) {
     start_animation(app, fr, fc, tr, tc, post);
 
     if (is_promo) {
-        /* We'll show the promotion dialog after animation completes */
-        app->awaiting_promotion = true;
-        app->promo_row = tr;
-        app->promo_col = tc;
-        /* Default to queen until player chooses */
+        /* Always promote to queen — only show the dialog for human moves */
         app->post_anim_game.board[tr][tc].type = QUEEN;
+
+        bool ai_is_moving = !app->player_vs_ai ||
+                            (app->player_vs_ai && moving.color !=
+                             (app->player_is_white ? WHITE : BLACK));
+        if (!ai_is_moving) {
+            /* Human move: let the player pick a piece */
+            app->awaiting_promotion = true;
+            app->promo_row = tr;
+            app->promo_col = tc;
+        }
     }
 }
 
@@ -1563,6 +1569,14 @@ static void request_new_game(App *app) {
     app->confirm_new_game = true;
 }
 
+static void quit_game(App *app) {
+    if (app->use_white_xboard) xboard_engine_quit(&app->white_engine);
+    if (app->use_black_xboard) xboard_engine_quit(&app->black_engine);
+    app->use_white_xboard = false;
+    app->use_black_xboard = false;
+    app->running = false;
+}
+
 static void handle_game_key(App *app, SDL_Keycode key) {
     switch (key) {
         case SDLK_n: request_new_game(app); break;
@@ -1588,7 +1602,7 @@ static void handle_game_key(App *app, SDL_Keycode key) {
             break;
         case SDLK_q:
         case SDLK_ESCAPE:
-            app->running = false;
+            quit_game(app);
             break;
         default: break;
     }
@@ -1719,7 +1733,7 @@ static void handle_menu_click(App *app, int px, int py) {
                     case 1:undo_move(app);break;
                     case 3:fb_scan(&app->fb,".sav");app->fb_input[0]=0;app->fb_input_len=0;app->screen=SCREEN_SAVE;break;
                     case 4:fb_scan(&app->fb,".sav");app->screen=SCREEN_LOAD;break;
-                    case 6:app->running=false;break;
+                    case 6: quit_game(app); break;
                 }
                 return;
             }
@@ -2069,7 +2083,7 @@ int main(int argc, char *argv[]) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
-                case SDL_QUIT: app->running=false; break;
+                case SDL_QUIT: quit_game(app); break;
 
                 case SDL_KEYDOWN: {
                     SDL_Keycode k=ev.key.keysym.sym;
@@ -2086,7 +2100,7 @@ int main(int argc, char *argv[]) {
                     if (k==SDLK_ESCAPE){
                         if (app->confirm_new_game){app->confirm_new_game=false;break;}
                         if (app->file_menu_open||app->help_menu_open){app->file_menu_open=app->help_menu_open=false;}
-                        else app->running=false;
+                        else quit_game(app);
                         break;
                     }
                     handle_game_key(app,k);
@@ -2151,7 +2165,7 @@ int main(int argc, char *argv[]) {
 
                 case SDL_WINDOWEVENT:
                     if (ev.window.event==SDL_WINDOWEVENT_CLOSE) {
-                        app->running=false;
+                        quit_game(app);
                     } else if (ev.window.event==SDL_WINDOWEVENT_RESIZED ||
                                ev.window.event==SDL_WINDOWEVENT_SIZE_CHANGED) {
                         int nw = ev.window.data1, nh = ev.window.data2;
