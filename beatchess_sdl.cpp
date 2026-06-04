@@ -39,6 +39,11 @@
 #include <math.h>
 #include <dirent.h>
 #include <sys/types.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 /* ============================================================================
  * Constants
@@ -544,18 +549,125 @@ static void start_ai_thinking(App *app) {
  * Engine whitelist
  * ============================================================================ */
 
+/* ============================================================================
+ * Engine binary resolution
+ * Looks for engine binaries next to the executable first (for bundled/MSIX
+ * installs), then falls back to PATH.
+ * ============================================================================ */
+
+#include <sys/stat.h>
+
+static char g_exe_dir[512] = {0};  /* directory containing this executable */
+
+static void resolve_exe_dir(void) {
+#ifdef _WIN32
+    char path[512] = {0};
+    GetModuleFileNameA(NULL, path, sizeof(path));
+    char *last = strrchr(path, '\\');
+    if (last) { *last = '\0'; strncpy(g_exe_dir, path, sizeof(g_exe_dir)-1); }
+#else
+    /* Linux/macOS: read /proc/self/exe or use argv[0] fallback */
+    ssize_t len = readlink("/proc/self/exe", g_exe_dir, sizeof(g_exe_dir)-1);
+    if (len > 0) {
+        g_exe_dir[len] = '\0';
+        char *last = strrchr(g_exe_dir, '/');
+        if (last) *last = '\0';
+    }
+#endif
+}
+
+/* Returns a heap-allocated command string for the engine.
+ * Checks <exe_dir>/engines/<binary>[.exe] first, then just <binary>.
+ * Caller owns the returned string (or it points to a static buffer). */
+static const char *resolve_engine_cmd(const char *binary, const char *args) {
+    static char resolved[1024];
+#ifdef _WIN32
+    const char *ext = ".exe";
+    const char sep  = '\\';
+#else
+    const char *ext = "";
+    const char sep  = '/';
+#endif
+    /* Try bundled path: <exe_dir>/engines/<binary>[.exe] */
+    if (g_exe_dir[0]) {
+        char candidate[768];
+        snprintf(candidate, sizeof(candidate), "%s%cengines%c%s%s",
+                 g_exe_dir, sep, sep, binary, ext);
+        struct stat st;
+        if (stat(candidate, &st) == 0) {
+            if (args && args[0])
+                snprintf(resolved, sizeof(resolved), "\"%s\" %s", candidate, args);
+            else
+                snprintf(resolved, sizeof(resolved), "\"%s\"", candidate);
+            return resolved;
+        }
+    }
+    /* Fall back to PATH */
+    if (args && args[0])
+        snprintf(resolved, sizeof(resolved), "%s %s", binary, args);
+    else
+        snprintf(resolved, sizeof(resolved), "%s", binary);
+    return resolved;
+}
+
+/* Engine whitelist — binary name, extra args, display name */
 typedef struct {
-    const char *name;   /* display name */
-    const char *cmd;    /* shell command, NULL = built-in BeatChess */
+    const char *name;      /* display name */
+    const char *binary;    /* executable name (no extension, no path) */
+    const char *args;      /* extra arguments */
+    const char *cmd_cache; /* resolved at startup, NULL until then */
+    bool        available; /* binary found (or built-in) */
 } EngineEntry;
 
-static const EngineEntry ENGINE_LIST[] = {
-    { "BeatChess",  NULL                  },
-    { "GNU Chess",  "gnuchess --xboard"   },
-    { "Stockfish",  "stockfish"           },
-    { "Crafty",     "crafty"              },
+static EngineEntry ENGINE_LIST[] = {
+    { "BeatChess", NULL,         NULL,       NULL, true  },  /* always available */
+    { "GNU Chess", "gnuchess",   "--xboard", NULL, false },
+    { "Stockfish", "stockfish",  NULL,       NULL, false },
+    { "Crafty",    "crafty",     NULL,       NULL, false },
 };
 static const int ENGINE_COUNT = 4;
+
+static void engine_list_init(void) {
+    resolve_exe_dir();
+    for (int i = 1; i < ENGINE_COUNT; i++) {  /* skip 0 = BeatChess */
+        const char *cmd = resolve_engine_cmd(ENGINE_LIST[i].binary, ENGINE_LIST[i].args);
+        ENGINE_LIST[i].cmd_cache = SDL_strdup(cmd);
+        /* Check availability: try to stat the binary itself */
+        char bin_path[768];
+        struct stat st;
+#ifdef _WIN32
+        const char sep = '\\';
+        snprintf(bin_path, sizeof(bin_path), "%s%cengines%c%s.exe",
+                 g_exe_dir, sep, sep, ENGINE_LIST[i].binary);
+#else
+        const char sep = '/';
+        snprintf(bin_path, sizeof(bin_path), "%s%cengines%c%s",
+                 g_exe_dir, sep, sep, ENGINE_LIST[i].binary);
+#endif
+        if (stat(bin_path, &st) == 0) {
+            ENGINE_LIST[i].available = true;
+        } else {
+            /* Also check PATH by trying to stat common locations */
+            const char *path_dirs[] = {
+                "/usr/bin", "/usr/local/bin", "/usr/games", "/usr/local/games", NULL
+            };
+            for (int d = 0; path_dirs[d]; d++) {
+                snprintf(bin_path, sizeof(bin_path), "%s/%s",
+                         path_dirs[d], ENGINE_LIST[i].binary);
+                if (stat(bin_path, &st) == 0) {
+                    ENGINE_LIST[i].available = true;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/* Returns the shell command to run this engine, or NULL for built-in. */
+static const char *engine_cmd(int idx) {
+    if (idx <= 0 || idx >= ENGINE_COUNT) return NULL;
+    return ENGINE_LIST[idx].cmd_cache;
+}
 
 static void game_new(App *app);  /* forward decl — defined below */
 
@@ -564,8 +676,8 @@ static void apply_engine_selection(App *app) {
     if (app->use_white_xboard) { xboard_engine_quit(&app->white_engine); app->use_white_xboard = false; }
     if (app->use_black_xboard) { xboard_engine_quit(&app->black_engine); app->use_black_xboard = false; }
 
-    const char *wcmd = ENGINE_LIST[app->engine_sel_white].cmd;
-    const char *bcmd = ENGINE_LIST[app->engine_sel_black].cmd;
+    const char *wcmd = engine_cmd(app->engine_sel_white);
+    const char *bcmd = engine_cmd(app->engine_sel_black);
 
     if (wcmd) {
         if (xboard_engine_init(&app->white_engine, wcmd)) {
@@ -1250,17 +1362,27 @@ static void draw_engine_select(App *app) {
         render_text_centered(r, g_font_med, sides[s], ex + col_w/2, ey, 200, 200, 220);
         ey += (int)(26 * g_scale);
         for (int i = 0; i < ENGINE_COUNT; i++) {
-            bool selected = (*sels[s] == i);
-            bool hov = (app->mouse_x >= ex && app->mouse_x < ex+bw &&
+            bool selected  = (*sels[s] == i);
+            bool available = ENGINE_LIST[i].available;
+            bool hov = available && (app->mouse_x >= ex && app->mouse_x < ex+bw &&
                         app->mouse_y >= ey && app->mouse_y < ey+bh);
-            Uint8 br = selected ? 60  : hov ? 55 : 35;
-            Uint8 bg = selected ? 100 : hov ? 55 : 35;
-            Uint8 bb = selected ? 160 : hov ? 70 : 45;
+            Uint8 br = !available ? 25 : selected ? 60  : hov ? 55 : 35;
+            Uint8 bg = !available ? 25 : selected ? 100 : hov ? 55 : 35;
+            Uint8 bb = !available ? 30 : selected ? 160 : hov ? 70 : 45;
             sdl_fill_rect(r, ex, ey, bw, bh, br, bg, bb, 255);
             sdl_draw_rect(r, ex, ey, bw, bh,
-                          selected ? 100 : 70, selected ? 160 : 70, selected ? 255 : 90, 255);
+                          selected ? 100 : 50, selected ? 160 : 50, selected ? 255 : 60, 255);
+            Uint8 tr = available ? 220 : 90, tg = available ? 220 : 90, tb = available ? 220 : 90;
             render_text_centered(r, g_font_sm, ENGINE_LIST[i].name,
-                                 ex + col_w/2, ey + (bh - FONT_SM) / 2, 220, 220, 220);
+                                 ex + bw/2, ey + (bh - FONT_SM) / 2, tr, tg, tb);
+            if (!available) {
+                /* "not installed" label */
+                char notavail[64];
+                snprintf(notavail, sizeof(notavail), "(not found)");
+                int nw, nh; TTF_SizeUTF8(g_font_sm, notavail, &nw, &nh);
+                render_text(r, g_font_sm, notavail, ex + bw - nw - 6,
+                            ey + (bh - nh)/2, 100, 80, 80);
+            }
             ey += bh + (int)(4 * g_scale);
         }
     }
@@ -1323,7 +1445,8 @@ static void handle_engine_select_click(App *app, int px, int py) {
         int ey = engine_block_y + (int)(26 * g_scale);
         int ex = col_xs[s];
         for (int i = 0; i < ENGINE_COUNT; i++) {
-            if (px >= ex && px < ex+col_w && py >= ey && py < ey+bh)
+            if (ENGINE_LIST[i].available &&
+                px >= ex && px < ex+col_w && py >= ey && py < ey+bh)
                 *sels[s] = i;
             ey += bh + (int)(4 * g_scale);
         }
@@ -1846,6 +1969,8 @@ int main(int argc, char *argv[]) {
     if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO|SDL_INIT_TIMER) != 0) {
         fprintf(stderr,"SDL_Init: %s\n",SDL_GetError()); return 1;
     }
+
+    engine_list_init();
 
     App *app = (App *)calloc(1, sizeof(App));
     if (!app) { fprintf(stderr,"OOM\n"); return 1; }
