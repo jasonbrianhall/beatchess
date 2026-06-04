@@ -14,12 +14,17 @@
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
-#include <unistd.h>
-#include <signal.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <errno.h>
-#include <pthread.h>
+
+#ifndef _WIN32
+#  include <unistd.h>
+#  include <signal.h>
+#  include <sys/types.h>
+#  include <sys/wait.h>
+#  include <pthread.h>
+#endif
+
+#ifndef _WIN32   /* ---- POSIX implementation (Linux / macOS) ---- */
 
 /* ============================================================================
  * Internal helpers
@@ -513,3 +518,107 @@ ChessMove xboard_get_best_move_now(XBoardEngine *eng) {
     pthread_mutex_unlock(&eng->lock);
     return mv;
 }
+
+#else   /* ---- Windows stubs (engine subprocess not supported) ---- */
+
+/* chess_game_to_fen and xboard_parse_move are pure logic — no POSIX needed. */
+
+static char piece_to_fen_char(ChessPiece p) {
+    char c;
+    switch (p.type) {
+        case PAWN:   c = 'p'; break;
+        case KNIGHT: c = 'n'; break;
+        case BISHOP: c = 'b'; break;
+        case ROOK:   c = 'r'; break;
+        case QUEEN:  c = 'q'; break;
+        case KING:   c = 'k'; break;
+        default:     return 0;
+    }
+    return (p.color == WHITE) ? (char)toupper(c) : c;
+}
+
+void chess_game_to_fen(ChessGameState *game, char *buf, size_t buf_len) {
+    char *p = buf;
+    char *end = buf + buf_len - 1;
+    for (int row = 0; row < BOARD_SIZE && p < end; row++) {
+        int empty = 0;
+        for (int col = 0; col < BOARD_SIZE && p < end; col++) {
+            ChessPiece piece = game->board[row][col];
+            if (piece.type == EMPTY) {
+                empty++;
+            } else {
+                if (empty) { p += snprintf(p, end - p, "%d", empty); empty = 0; }
+                char c = piece_to_fen_char(piece);
+                if (p < end) *p++ = c;
+            }
+        }
+        if (empty && p < end) { p += snprintf(p, end - p, "%d", empty); }
+        if (row < 7 && p < end) *p++ = '/';
+    }
+    p += snprintf(p, end - p, " %c", game->turn == WHITE ? 'w' : 'b');
+    char castling[5] = {0};
+    int ci = 0;
+    if (!game->white_king_moved) {
+        if (!game->white_rook_h_moved) castling[ci++] = 'K';
+        if (!game->white_rook_a_moved) castling[ci++] = 'Q';
+    }
+    if (!game->black_king_moved) {
+        if (!game->black_rook_h_moved) castling[ci++] = 'k';
+        if (!game->black_rook_a_moved) castling[ci++] = 'q';
+    }
+    if (ci == 0) castling[ci++] = '-';
+    castling[ci] = '\0';
+    p += snprintf(p, end - p, " %s", castling);
+    if (game->en_passant_col >= 0) {
+        char ep_file = 'a' + game->en_passant_col;
+        int  ep_rank = 8 - game->en_passant_row;
+        p += snprintf(p, end - p, " %c%d", ep_file, ep_rank);
+    } else {
+        p += snprintf(p, end - p, " -");
+    }
+    p += snprintf(p, end - p, " 0 1");
+    *p = '\0';
+}
+
+bool xboard_parse_move(const char *token, ChessMove *out_move) {
+    if (!token || strlen(token) < 4) return false;
+    if (token[0] < 'a' || token[0] > 'h') return false;
+    if (token[1] < '1' || token[1] > '8') return false;
+    if (token[2] < 'a' || token[2] > 'h') return false;
+    if (token[3] < '1' || token[3] > '8') return false;
+    out_move->from_col = token[0] - 'a';
+    out_move->from_row = 8 - (token[1] - '0');
+    out_move->to_col   = token[2] - 'a';
+    out_move->to_row   = 8 - (token[3] - '0');
+    out_move->score    = 0;
+    return true;
+}
+
+/* All engine-subprocess functions are no-ops on Windows. */
+bool xboard_engine_init(XBoardEngine *eng, const char *) {
+    memset(eng, 0, sizeof(*eng));
+    eng->engine_ok = false;
+    SDL_Log("[xboard] Engine subprocess not supported on Windows.");
+    return false;
+}
+bool xboard_engine_init_uci(XBoardEngine *eng, const char *) {
+    memset(eng, 0, sizeof(*eng));
+    eng->engine_ok = false;
+    SDL_Log("[xboard] Engine subprocess not supported on Windows.");
+    return false;
+}
+void xboard_engine_quit(XBoardEngine *)                      {}
+void xboard_engine_set_depth(XBoardEngine *, int)            {}
+void xboard_engine_set_time(XBoardEngine *, int)             {}
+void xboard_move_made(XBoardEngine *, int)                   {}
+void xboard_start_thinking(XBoardEngine *, ChessGameState *) {}
+bool xboard_has_move(XBoardEngine *)                         { return false; }
+bool xboard_is_thinking(XBoardEngine *)                      { return false; }
+ChessMove xboard_get_best_move(XBoardEngine *) {
+    ChessMove mv; memset(&mv, 0, sizeof(mv)); mv.from_row = -1; return mv;
+}
+ChessMove xboard_get_best_move_now(XBoardEngine *) {
+    ChessMove mv; memset(&mv, 0, sizeof(mv)); mv.from_row = -1; return mv;
+}
+
+#endif  /* _WIN32 */
