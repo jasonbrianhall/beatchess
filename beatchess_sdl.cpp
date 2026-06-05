@@ -1965,7 +1965,6 @@ static void handle_dialog_key(App *app, SDL_Keycode key, bool is_save) {
                     app->game=vis.game; app->move_history_count=vis.move_history_count; app->move_count=vis.move_count;
                     for(int i=0;i<vis.move_history_count;i++) app->move_history[i]=vis.move_history[i];
                     snprintf(app->status,sizeof(app->status),"Loaded: %s",fn);
-                    start_ai_thinking(app);
                 }
             }
             app->screen=SCREEN_GAME; break;
@@ -2058,6 +2057,7 @@ static void update_ai(App *app, float dt) {
 
     app->ai_thinking = is_thinking || has_move;
     if (is_thinking || has_move) app->time_thinking += dt;
+    if (!has_move && !is_thinking) { start_ai_thinking(app); return; }
     if (!has_move) return;
 
     bool should_play = false;
@@ -2294,9 +2294,9 @@ int main(int argc, char *argv[]) {
                         if (app->screen==SCREEN_HELP||app->screen==SCREEN_ABOUT){app->screen=SCREEN_GAME;break;}
                         if (app->screen==SCREEN_ENGINE_SELECT){handle_engine_select_click(app,px,py);break;}
                         if (app->screen==SCREEN_SAVE||app->screen==SCREEN_LOAD){
-                            int ly=(int)(60*g_scale),lh=(int)(360*g_scale);
-                            if (px>=60&&px<LOGICAL_W-60&&py>=ly&&py<ly+lh){
-                                int idx=(py-ly)/((int)(24*g_scale))+app->fb.scroll;
+                            int ly=(int)(50*g_scale),bottom_reserve=(app->screen==SCREEN_SAVE?(int)(90*g_scale):(int)(40*g_scale)),lh=LOGICAL_H-ly-bottom_reserve;
+                            if (px>=(int)(60*g_scale)&&px<LOGICAL_W-(int)(60*g_scale)&&py>=ly&&py<ly+lh){
+                                int idx=(py-ly)/((int)(28*g_scale))+app->fb.scroll;
                                 if (idx>=0&&idx<app->fb.count){
                                     if (idx==app->fb.selected&&app->screen==SCREEN_LOAD)
                                         handle_dialog_key(app,SDLK_RETURN,false);

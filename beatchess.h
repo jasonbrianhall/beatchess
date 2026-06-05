@@ -117,6 +117,7 @@ typedef struct {
     int current_depth;
     bool has_move;
     bool thinking;
+    volatile bool abort_search;
 #if BEATCHESS_HAS_PTHREAD
     pthread_mutex_t lock;
     pthread_t thread;

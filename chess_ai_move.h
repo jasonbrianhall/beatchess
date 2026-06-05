@@ -38,6 +38,8 @@ typedef struct {
     int search_depth;           /* Depth of minimax search (typically 3-5) */
     int threshold_centipawns;   /* Moves within this threshold are considered (e.g., 25) */
     bool use_randomization;     /* If true, randomly pick from candidate moves */
+    double min_think_ms;   // minimum delay in ms; 0 = as fast as possible
+
 } ChessAIConfig;
 
 /**
@@ -50,6 +52,8 @@ typedef struct {
     int score;                  /* Evaluation score of the move */
     int total_moves_evaluated;  /* Total number of legal moves evaluated */
     int candidate_moves;        /* Number of moves within threshold */
+    double min_think_ms;        // minimum delay in ms; 0 = as fast as possible
+
 } ChessAIMoveResult;
 
 /**
