@@ -912,8 +912,9 @@ static void undo_move(App *app) {
 static void player_resign(App *app) {
     if (app->is_checkmate || app->is_stalemate || app->resigned) return;
     app->resigned = true;
-    const char *loser = app->player_is_white ? "White" : "Black";
-    snprintf(app->status, sizeof(app->status), "%s resigns.", loser);
+    const char *loser  = app->player_is_white ? "White" : "Black";
+    const char *winner = app->player_is_white ? "Black" : "White";
+    snprintf(app->status, sizeof(app->status), "%s resigns. %s wins!", loser, winner);
     audio_play_resign();
 }
 
@@ -1690,12 +1691,9 @@ static void request_new_game(App *app) {
 }
 
 static void stop_ai_thinking(App *app) {
-    /* Cancel built-in minimax thread — don't join, chess_cleanup_thinking_state owns that */
 #if BEATCHESS_HAS_PTHREAD
     if (app->thinking.thinking) {
-        /* AI_YIELD_IMPL() calls pthread_testcancel() in SDL builds, so
-         * deferred cancellation will fire at the next top-level move evaluation */
-        pthread_cancel(app->thinking.thread);
+        app->thinking.abort_search = true;
     }
 #endif
     app->thinking.thinking = false;
@@ -2411,11 +2409,9 @@ int main(int argc, char *argv[]) {
     }
 
     SDL_StopTextInput();
-    /* Cancel the built-in AI thread immediately so quit doesn't hang
-     * waiting for a long minimax search to finish. */
 #if BEATCHESS_HAS_PTHREAD
     if (app->thinking.thinking && app->thinking.thread) {
-        pthread_cancel(app->thinking.thread);
+        app->thinking.abort_search = true;
     }
 #endif
     if (app->use_white_xboard) xboard_engine_quit(&app->white_engine);
