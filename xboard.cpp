@@ -1,54 +1,38 @@
 /*
- * xboard_engine.cpp — XBoard/WinBoard protocol engine subprocess wrapper
+ * xboard.cpp — XBoard/UCI protocol engine subprocess wrapper
  *
- * Compile alongside your other SDL sources:
- *   g++ ... xboard_engine.cpp -lpthread
+ * Supports Linux (fork/pipe) and Windows (CreateProcess/CreatePipe).
+ * Both platforms use pthreads — mingw-w64 ships pthreadGC2 which provides
+ * pthread_t/mutex/cond natively on Windows, so no shims are needed.
+ *
+ * Linux:   g++ ... xboard.cpp -lpthread
+ * Windows: x86_64-w64-mingw32-g++ ... xboard.cpp -lpthread
  */
 
 #include "xboard_engine.h"
-
 #include <SDL2/SDL.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
 #include <errno.h>
+#include <pthread.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#  include <io.h>       /* _open_osfhandle, _fdopen */
+#  include <fcntl.h>
+#else
 #  include <unistd.h>
 #  include <signal.h>
 #  include <sys/types.h>
 #  include <sys/wait.h>
-#  include <pthread.h>
 #endif
 
-#ifndef _WIN32   /* ---- POSIX implementation (Linux / macOS) ---- */
-
 /* ============================================================================
- * Internal helpers
- * ============================================================================ */
-
-/* Send a line to the engine (adds newline, flushes). */
-static void engine_send(XBoardEngine *eng, const char *line) {
-    if (!eng->engine_ok || !eng->to_engine) return;
-    fprintf(eng->to_engine, "%s\n", line);
-    fflush(eng->to_engine);
-}
-
-static void engine_sendf(XBoardEngine *eng, const char *fmt, ...) {
-    if (!eng->engine_ok || !eng->to_engine) return;
-    va_list ap;
-    va_start(ap, fmt);
-    vfprintf(eng->to_engine, fmt, ap);
-    va_end(ap);
-    fprintf(eng->to_engine, "\n");
-    fflush(eng->to_engine);
-}
-
-/* ============================================================================
- * FEN generation
+ * FEN generation  (shared)
  * ============================================================================ */
 
 static char piece_to_fen_char(ChessPiece p) {
@@ -69,7 +53,6 @@ void chess_game_to_fen(ChessGameState *game, char *buf, size_t buf_len) {
     char *p = buf;
     char *end = buf + buf_len - 1;
 
-    /* Piece placement — rank 8 (row 0) to rank 1 (row 7) */
     for (int row = 0; row < BOARD_SIZE && p < end; row++) {
         int empty = 0;
         for (int col = 0; col < BOARD_SIZE && p < end; col++) {
@@ -86,10 +69,8 @@ void chess_game_to_fen(ChessGameState *game, char *buf, size_t buf_len) {
         if (row < 7 && p < end) *p++ = '/';
     }
 
-    /* Active color */
     p += snprintf(p, end - p, " %c", game->turn == WHITE ? 'w' : 'b');
 
-    /* Castling availability */
     char castling[5] = {0};
     int ci = 0;
     if (!game->white_king_moved) {
@@ -104,50 +85,59 @@ void chess_game_to_fen(ChessGameState *game, char *buf, size_t buf_len) {
     castling[ci] = '\0';
     p += snprintf(p, end - p, " %s", castling);
 
-    /* En passant target square */
     if (game->en_passant_col >= 0) {
         char ep_file = 'a' + game->en_passant_col;
-        int  ep_rank = 8 - game->en_passant_row;   /* row 0 = rank 8 */
+        int  ep_rank = 8 - game->en_passant_row;
         p += snprintf(p, end - p, " %c%d", ep_file, ep_rank);
     } else {
         p += snprintf(p, end - p, " -");
     }
 
-    /* Halfmove clock and fullmove number (we don't track these precisely) */
     p += snprintf(p, end - p, " 0 1");
-
     *p = '\0';
 }
 
 /* ============================================================================
- * XBoard move parsing  (e.g. "e2e4", "e7e8q")
+ * XBoard move parsing  (shared)
  * ============================================================================ */
 
 bool xboard_parse_move(const char *token, ChessMove *out_move) {
-    /* Expect at least 4 chars: file rank file rank */
     if (!token || strlen(token) < 4) return false;
     if (token[0] < 'a' || token[0] > 'h') return false;
     if (token[1] < '1' || token[1] > '8') return false;
     if (token[2] < 'a' || token[2] > 'h') return false;
     if (token[3] < '1' || token[3] > '8') return false;
 
-    int from_col = token[0] - 'a';
-    int from_row = 8 - (token[1] - '0');   /* rank 8 = row 0 */
-    int to_col   = token[2] - 'a';
-    int to_row   = 8 - (token[3] - '0');
-
-    out_move->from_col = from_col;
-    out_move->from_row = from_row;
-    out_move->to_col   = to_col;
-    out_move->to_row   = to_row;
+    out_move->from_col = token[0] - 'a';
+    out_move->from_row = 8 - (token[1] - '0');
+    out_move->to_col   = token[2] - 'a';
+    out_move->to_row   = 8 - (token[3] - '0');
     out_move->score    = 0;
-    /* Promotion piece (token[4]) is ignored for now — chess_execute_move
-     * in beatchess already promotes to queen by default. */
     return true;
 }
 
 /* ============================================================================
- * Reader thread — runs in background, blocks on fgets from engine stdout
+ * Send helpers  (shared — FILE* works on both platforms)
+ * ============================================================================ */
+
+static void engine_send(XBoardEngine *eng, const char *line) {
+    if (!eng->engine_ok || !eng->to_engine) return;
+    fprintf(eng->to_engine, "%s\n", line);
+    fflush(eng->to_engine);
+}
+
+static void engine_sendf(XBoardEngine *eng, const char *fmt, ...) {
+    if (!eng->engine_ok || !eng->to_engine) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(eng->to_engine, fmt, ap);
+    va_end(ap);
+    fprintf(eng->to_engine, "\n");
+    fflush(eng->to_engine);
+}
+
+/* ============================================================================
+ * Reader thread  (shared)
  * ============================================================================ */
 
 static void *reader_thread_fn(void *arg) {
@@ -155,7 +145,6 @@ static void *reader_thread_fn(void *arg) {
     char line[512];
 
     while (eng->engine_ok && fgets(line, sizeof(line), eng->from_engine)) {
-        /* Strip trailing whitespace */
         size_t len = strlen(line);
         while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'
                            || line[len-1] == ' ')) {
@@ -163,17 +152,11 @@ static void *reader_thread_fn(void *arg) {
         }
         if (len == 0) continue;
 
-        /* XBoard engines send move responses as:
-         *   "move e2e4"        (most engines)
-         *   "My move is: e2e4" (gnuchess legacy format)
-         * Also skip lines starting with '#' (comments) or known noise. */
-
         const char *mv_token = NULL;
 
         if (strncmp(line, "move ", 5) == 0) {
             mv_token = line + 5;
         } else if (strncmp(line, "My move is", 10) == 0) {
-            /* "My move is: e2e4" or "My move is e2e4" */
             const char *colon = strchr(line + 10, ':');
             mv_token = colon ? colon + 2 : line + 11;
             while (*mv_token == ' ') mv_token++;
@@ -182,9 +165,7 @@ static void *reader_thread_fn(void *arg) {
         if (mv_token) {
             ChessMove mv;
             if (xboard_parse_move(mv_token, &mv)) {
-#ifndef MSDOS                
                 SDL_Log("[engine] move: %s", mv_token);
-#endif
                 pthread_mutex_lock(&eng->lock);
                 eng->best_move = mv;
                 eng->has_move  = true;
@@ -193,16 +174,12 @@ static void *reader_thread_fn(void *arg) {
                 pthread_mutex_unlock(&eng->lock);
             }
         } else if (eng->protocol == ENGINE_PROTOCOL_UCI) {
-            /* UCI: "bestmove e2e4 [ponder ...]" */
             if (strncmp(line, "bestmove ", 9) == 0) {
                 const char *tok = line + 9;
-                /* skip "(none)" which stockfish emits on game over */
                 if (strncmp(tok, "(none)", 6) != 0) {
                     ChessMove mv;
                     if (xboard_parse_move(tok, &mv)) {
-#ifndef MSDOS
                         SDL_Log("[engine] bestmove: %s", tok);
-#endif
                         pthread_mutex_lock(&eng->lock);
                         eng->best_move = mv;
                         eng->has_move  = true;
@@ -215,21 +192,14 @@ static void *reader_thread_fn(void *arg) {
                 pthread_mutex_lock(&eng->lock);
                 strncpy(eng->engine_name, line + 8, sizeof(eng->engine_name) - 1);
                 pthread_mutex_unlock(&eng->lock);
-#ifndef MSDOS
                 SDL_Log("[engine] %s", line);
-#endif
             } else if (strncmp(line, "info ", 5) == 0) {
-#ifndef MSDOS
                 SDL_Log("[engine thinking] %s", line);
-#endif
             } else {
-#ifndef MSDOS
                 SDL_Log("[engine] %s", line);
-#endif
             }
         }
 
-        /* XBoard: parse "feature myname=..." from protover 2 handshake */
         if (eng->protocol == ENGINE_PROTOCOL_XBOARD) {
             const char *fn = strstr(line, "myname=");
             if (fn) {
@@ -261,43 +231,106 @@ static void *reader_thread_fn(void *arg) {
 }
 
 /* ============================================================================
- * Public API implementation
+ * Platform-specific subprocess spawn / kill
  * ============================================================================ */
 
-bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
-    memset(eng, 0, sizeof(*eng));
-    strncpy(eng->engine_cmd, engine_cmd, sizeof(eng->engine_cmd) - 1);
-    eng->engine_ok = false;
+#ifdef _WIN32
 
-    /* Create two pipes: parent→child (stdin) and child→parent (stdout) */
+static bool spawn_engine(XBoardEngine *eng, const char *engine_cmd) {
+    HANDLE pipe_stdin_r  = NULL, pipe_stdin_w  = NULL;
+    HANDLE pipe_stdout_r = NULL, pipe_stdout_w = NULL;
+
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength              = sizeof(sa);
+    sa.bInheritHandle       = TRUE;
+
+    if (!CreatePipe(&pipe_stdin_r,  &pipe_stdin_w,  &sa, 0) ||
+        !CreatePipe(&pipe_stdout_r, &pipe_stdout_w, &sa, 0)) {
+        SDL_Log("[xboard] CreatePipe failed: %lu", GetLastError());
+        return false;
+    }
+
+    /* Parent ends must not be inherited by the child */
+    SetHandleInformation(pipe_stdin_w,  HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(pipe_stdout_r, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si = {};
+    si.cb          = sizeof(si);
+    si.dwFlags     = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.hStdInput   = pipe_stdin_r;
+    si.hStdOutput  = pipe_stdout_w;
+    si.hStdError   = INVALID_HANDLE_VALUE;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi = {};
+    char cmd_buf[512];
+    strncpy(cmd_buf, engine_cmd, sizeof(cmd_buf) - 1);
+    cmd_buf[sizeof(cmd_buf) - 1] = '\0';
+
+    if (!CreateProcessA(NULL, cmd_buf, NULL, NULL, TRUE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        SDL_Log("[xboard] CreateProcess failed: %lu", GetLastError());
+        CloseHandle(pipe_stdin_r);  CloseHandle(pipe_stdin_w);
+        CloseHandle(pipe_stdout_r); CloseHandle(pipe_stdout_w);
+        return false;
+    }
+
+    /* Close child's ends and the thread handle — we only need the process */
+    CloseHandle(pipe_stdin_r);
+    CloseHandle(pipe_stdout_w);
+    CloseHandle(pi.hThread);
+
+    eng->child_process = pi.hProcess;
+
+    /* Wrap HANDLEs in FILE* so fprintf/fgets work identically to POSIX */
+    int fd_w = _open_osfhandle((intptr_t)pipe_stdin_w,  _O_WRONLY);
+    int fd_r = _open_osfhandle((intptr_t)pipe_stdout_r, _O_RDONLY);
+    eng->to_engine   = (fd_w >= 0) ? _fdopen(fd_w, "w") : NULL;
+    eng->from_engine = (fd_r >= 0) ? _fdopen(fd_r, "r") : NULL;
+
+    if (!eng->to_engine || !eng->from_engine) {
+        SDL_Log("[xboard] _fdopen failed");
+        TerminateProcess(eng->child_process, 1);
+        CloseHandle(eng->child_process);
+        eng->child_process = NULL;
+        return false;
+    }
+
+    return true;
+}
+
+static void kill_engine(XBoardEngine *eng) {
+    if (eng->child_process) {
+        TerminateProcess(eng->child_process, 0);
+        WaitForSingleObject(eng->child_process, 1000);
+        CloseHandle(eng->child_process);
+        eng->child_process = NULL;
+    }
+}
+
+#else  /* POSIX */
+
+static bool spawn_engine(XBoardEngine *eng, const char *engine_cmd) {
     int to_child[2], from_child[2];
     if (pipe(to_child) < 0 || pipe(from_child) < 0) {
-        perror("xboard_engine_init: pipe");
+        perror("xboard: pipe");
         return false;
     }
 
     pid_t pid = fork();
-    if (pid < 0) {
-        perror("xboard_engine_init: fork");
-        return false;
-    }
+    if (pid < 0) { perror("xboard: fork"); return false; }
 
     if (pid == 0) {
-        /* Child process */
         dup2(to_child[0],   STDIN_FILENO);
         dup2(from_child[1], STDOUT_FILENO);
-        /* Close unused ends */
         close(to_child[1]);
         close(from_child[0]);
-        /* Redirect stderr to /dev/null to avoid polluting our pipe */
         FILE *devnull = fopen("/dev/null", "w");
         if (devnull) dup2(fileno(devnull), STDERR_FILENO);
-
         execl("/bin/sh", "sh", "-c", engine_cmd, (char *)NULL);
-        _exit(127);   /* execl failed */
+        _exit(127);
     }
 
-    /* Parent process */
     close(to_child[0]);
     close(from_child[1]);
 
@@ -306,35 +339,72 @@ bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
     eng->from_engine = fdopen(from_child[0], "r");
 
     if (!eng->to_engine || !eng->from_engine) {
-        perror("xboard_engine_init: fdopen");
+        perror("xboard: fdopen");
         kill(pid, SIGKILL);
         return false;
     }
 
-    eng->engine_ok = true;
-    eng->protocol  = ENGINE_PROTOCOL_XBOARD;
+    return true;
+}
 
+static void kill_engine(XBoardEngine *eng) {
+    waitpid(eng->child_pid, NULL, WNOHANG);
+    kill(eng->child_pid, SIGTERM);
+}
+
+#endif /* _WIN32 */
+
+/* ============================================================================
+ * Common init
+ * ============================================================================ */
+
+static bool common_init(XBoardEngine *eng, const char *engine_cmd) {
+    memset(eng, 0, sizeof(*eng));
+    strncpy(eng->engine_cmd, engine_cmd, sizeof(eng->engine_cmd) - 1);
+
+    if (!spawn_engine(eng, engine_cmd))
+        return false;
+
+    eng->engine_ok = true;
     pthread_mutex_init(&eng->lock, NULL);
     pthread_cond_init(&eng->cond, NULL);
 
-    /* Start reader thread before handshake so feature responses are drained */
     if (pthread_create(&eng->reader_thread, NULL, reader_thread_fn, eng) != 0) {
-        perror("xboard_engine_init: pthread_create");
+        SDL_Log("[xboard] pthread_create failed");
         fclose(eng->to_engine);
         fclose(eng->from_engine);
-        kill(pid, SIGKILL);
+        kill_engine(eng);
         eng->engine_ok = false;
         return false;
     }
 
-    /* XBoard handshake */
+    return true;
+}
+
+/* ============================================================================
+ * Public API
+ * ============================================================================ */
+
+bool xboard_engine_init(XBoardEngine *eng, const char *engine_cmd) {
+    if (!common_init(eng, engine_cmd)) return false;
+    eng->protocol = ENGINE_PROTOCOL_XBOARD;
     engine_send(eng, "xboard");
     engine_send(eng, "protover 2");
     engine_send(eng, "post");
     engine_send(eng, "sd " XBOARD_DEFAULT_DEPTH_STR);
     engine_send(eng, "new");
     engine_send(eng, "force");
+    return true;
+}
 
+bool xboard_engine_init_uci(XBoardEngine *eng, const char *engine_cmd) {
+    if (!common_init(eng, engine_cmd)) return false;
+    eng->protocol = ENGINE_PROTOCOL_UCI;
+    engine_send(eng, "uci");
+    engine_send(eng, "setoption name Threads value 1");
+    engine_send(eng, "setoption name Hash value 32");
+    engine_send(eng, "isready");
+    engine_send(eng, "ucinewgame");
     return true;
 }
 
@@ -342,79 +412,18 @@ void xboard_engine_quit(XBoardEngine *eng) {
     if (!eng->engine_ok) return;
     eng->engine_ok = false;
 
-    /* Send quit/stop so the engine exits cleanly */
     if (eng->protocol == ENGINE_PROTOCOL_UCI)
         engine_send(eng, "stop");
     engine_send(eng, "quit");
 
-    /* Close write pipe — engine sees EOF on stdin */
     if (eng->to_engine)   { fclose(eng->to_engine);   eng->to_engine   = NULL; }
-
-    /* Close read pipe — unblocks the reader thread's fgets() */
     if (eng->from_engine) { fclose(eng->from_engine); eng->from_engine = NULL; }
 
-    /* Detach reader thread — we don't need to wait for it */
     pthread_detach(eng->reader_thread);
-
-    /* Reap child without blocking — let OS clean up if it's still running */
-    waitpid(eng->child_pid, NULL, WNOHANG);
-    /* Send SIGTERM in case it didn't exit yet */
-    kill(eng->child_pid, SIGTERM);
+    kill_engine(eng);
 
     pthread_mutex_destroy(&eng->lock);
     pthread_cond_destroy(&eng->cond);
-}
-
-bool xboard_engine_init_uci(XBoardEngine *eng, const char *engine_cmd) {
-    /* Spawn subprocess identically to xboard_engine_init */
-    memset(eng, 0, sizeof(*eng));
-    strncpy(eng->engine_cmd, engine_cmd, sizeof(eng->engine_cmd) - 1);
-    eng->engine_ok = false;
-    eng->protocol  = ENGINE_PROTOCOL_UCI;
-
-    int to_child[2], from_child[2];
-    if (pipe(to_child) < 0 || pipe(from_child) < 0) return false;
-
-    pid_t pid = fork();
-    if (pid < 0) { close(to_child[0]); close(to_child[1]); close(from_child[0]); close(from_child[1]); return false; }
-
-    if (pid == 0) {
-        dup2(to_child[0],   STDIN_FILENO);
-        dup2(from_child[1], STDOUT_FILENO);
-        close(to_child[1]); close(from_child[0]);
-        FILE *devnull = fopen("/dev/null", "w");
-        if (devnull) dup2(fileno(devnull), STDERR_FILENO);
-        execl("/bin/sh", "sh", "-c", engine_cmd, (char *)NULL);
-        _exit(127);
-    }
-
-    close(to_child[0]); close(from_child[1]);
-    eng->child_pid   = pid;
-    eng->to_engine   = fdopen(to_child[1],   "w");
-    eng->from_engine = fdopen(from_child[0], "r");
-    if (!eng->to_engine || !eng->from_engine) { kill(pid, SIGKILL); return false; }
-
-    eng->engine_ok = true;
-    pthread_mutex_init(&eng->lock, NULL);
-    pthread_cond_init(&eng->cond, NULL);
-
-    /* Start reader thread BEFORE handshake so Stockfish's stdout is drained
-     * immediately — otherwise the pipe buffer fills and we deadlock. */
-    if (pthread_create(&eng->reader_thread, NULL, reader_thread_fn, eng) != 0) {
-        fclose(eng->to_engine); fclose(eng->from_engine);
-        kill(pid, SIGKILL);
-        eng->engine_ok = false;
-        return false;
-    }
-
-    /* UCI handshake — reader thread drains the responses asynchronously */
-    engine_send(eng, "uci");
-    /* Constrain resource usage — important when running two instances */
-    engine_send(eng, "setoption name Threads value 1");
-    engine_send(eng, "setoption name Hash value 32");
-    engine_send(eng, "isready");
-    engine_send(eng, "ucinewgame");
-    return true;
 }
 
 void xboard_engine_set_depth(XBoardEngine *eng, int depth) {
@@ -424,10 +433,7 @@ void xboard_engine_set_depth(XBoardEngine *eng, int depth) {
 void xboard_engine_set_time(XBoardEngine *eng, int total_ms) {
     eng->time_limit_ms     = total_ms;
     eng->time_remaining_ms = total_ms;
-    if (eng->protocol == ENGINE_PROTOCOL_UCI) {
-        /* UCI uses wtime/btime in go command — nothing to send now */
-        return;
-    }
+    if (eng->protocol == ENGINE_PROTOCOL_UCI) return;
     if (total_ms > 0) {
         int minutes = total_ms / 60000;
         int seconds = (total_ms % 60000) / 1000;
@@ -463,22 +469,15 @@ void xboard_start_thinking(XBoardEngine *eng, ChessGameState *game) {
         engine_sendf(eng, "position fen %s", fen);
         if (eng->time_limit_ms > 0) {
             int ms = eng->time_remaining_ms;
-            /* wtime/btime: pass remaining time for the side to move */
-            if (game->turn == WHITE)
-                engine_sendf(eng, "go wtime %d btime %d", ms, ms);
-            else
-                engine_sendf(eng, "go wtime %d btime %d", ms, ms);
+            engine_sendf(eng, "go wtime %d btime %d", ms, ms);
         } else {
             engine_sendf(eng, "go depth %d", XBOARD_DEFAULT_DEPTH);
         }
     } else {
-        /* XBoard protocol */
         engine_send(eng, "force");
         engine_sendf(eng, "setboard %s", fen);
-        if (eng->time_limit_ms > 0) {
-            int cs = eng->time_remaining_ms / 10;
-            engine_sendf(eng, "time %d", cs);
-        }
+        if (eng->time_limit_ms > 0)
+            engine_sendf(eng, "time %d", eng->time_remaining_ms / 10);
         engine_send(eng, "go");
     }
 }
@@ -513,112 +512,8 @@ ChessMove xboard_get_best_move_now(XBoardEngine *eng) {
         eng->has_move = false;
     } else {
         memset(&mv, 0, sizeof(mv));
-        mv.from_row = -1;   /* sentinel: no move available yet */
+        mv.from_row = -1;
     }
     pthread_mutex_unlock(&eng->lock);
     return mv;
 }
-
-#else   /* ---- Windows stubs (engine subprocess not supported) ---- */
-
-/* chess_game_to_fen and xboard_parse_move are pure logic — no POSIX needed. */
-
-static char piece_to_fen_char(ChessPiece p) {
-    char c;
-    switch (p.type) {
-        case PAWN:   c = 'p'; break;
-        case KNIGHT: c = 'n'; break;
-        case BISHOP: c = 'b'; break;
-        case ROOK:   c = 'r'; break;
-        case QUEEN:  c = 'q'; break;
-        case KING:   c = 'k'; break;
-        default:     return 0;
-    }
-    return (p.color == WHITE) ? (char)toupper(c) : c;
-}
-
-void chess_game_to_fen(ChessGameState *game, char *buf, size_t buf_len) {
-    char *p = buf;
-    char *end = buf + buf_len - 1;
-    for (int row = 0; row < BOARD_SIZE && p < end; row++) {
-        int empty = 0;
-        for (int col = 0; col < BOARD_SIZE && p < end; col++) {
-            ChessPiece piece = game->board[row][col];
-            if (piece.type == EMPTY) {
-                empty++;
-            } else {
-                if (empty) { p += snprintf(p, end - p, "%d", empty); empty = 0; }
-                char c = piece_to_fen_char(piece);
-                if (p < end) *p++ = c;
-            }
-        }
-        if (empty && p < end) { p += snprintf(p, end - p, "%d", empty); }
-        if (row < 7 && p < end) *p++ = '/';
-    }
-    p += snprintf(p, end - p, " %c", game->turn == WHITE ? 'w' : 'b');
-    char castling[5] = {0};
-    int ci = 0;
-    if (!game->white_king_moved) {
-        if (!game->white_rook_h_moved) castling[ci++] = 'K';
-        if (!game->white_rook_a_moved) castling[ci++] = 'Q';
-    }
-    if (!game->black_king_moved) {
-        if (!game->black_rook_h_moved) castling[ci++] = 'k';
-        if (!game->black_rook_a_moved) castling[ci++] = 'q';
-    }
-    if (ci == 0) castling[ci++] = '-';
-    castling[ci] = '\0';
-    p += snprintf(p, end - p, " %s", castling);
-    if (game->en_passant_col >= 0) {
-        char ep_file = 'a' + game->en_passant_col;
-        int  ep_rank = 8 - game->en_passant_row;
-        p += snprintf(p, end - p, " %c%d", ep_file, ep_rank);
-    } else {
-        p += snprintf(p, end - p, " -");
-    }
-    p += snprintf(p, end - p, " 0 1");
-    *p = '\0';
-}
-
-bool xboard_parse_move(const char *token, ChessMove *out_move) {
-    if (!token || strlen(token) < 4) return false;
-    if (token[0] < 'a' || token[0] > 'h') return false;
-    if (token[1] < '1' || token[1] > '8') return false;
-    if (token[2] < 'a' || token[2] > 'h') return false;
-    if (token[3] < '1' || token[3] > '8') return false;
-    out_move->from_col = token[0] - 'a';
-    out_move->from_row = 8 - (token[1] - '0');
-    out_move->to_col   = token[2] - 'a';
-    out_move->to_row   = 8 - (token[3] - '0');
-    out_move->score    = 0;
-    return true;
-}
-
-/* All engine-subprocess functions are no-ops on Windows. */
-bool xboard_engine_init(XBoardEngine *eng, const char *) {
-    memset(eng, 0, sizeof(*eng));
-    eng->engine_ok = false;
-    SDL_Log("[xboard] Engine subprocess not supported on Windows.");
-    return false;
-}
-bool xboard_engine_init_uci(XBoardEngine *eng, const char *) {
-    memset(eng, 0, sizeof(*eng));
-    eng->engine_ok = false;
-    SDL_Log("[xboard] Engine subprocess not supported on Windows.");
-    return false;
-}
-void xboard_engine_quit(XBoardEngine *)                      {}
-void xboard_engine_set_depth(XBoardEngine *, int)            {}
-void xboard_engine_set_time(XBoardEngine *, int)             {}
-void xboard_move_made(XBoardEngine *, int)                   {}
-void xboard_start_thinking(XBoardEngine *, ChessGameState *) {}
-bool xboard_has_move(XBoardEngine *)                         { return false; }
-bool xboard_is_thinking(XBoardEngine *)                      { return false; }
-ChessMove xboard_get_best_move(XBoardEngine *) {
-    ChessMove mv; memset(&mv, 0, sizeof(mv)); mv.from_row = -1; return mv;
-}
-ChessMove xboard_get_best_move_now(XBoardEngine *) {
-    ChessMove mv; memset(&mv, 0, sizeof(mv)); mv.from_row = -1; return mv;
-}
-
-#endif  /* _WIN32 */

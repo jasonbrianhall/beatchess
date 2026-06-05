@@ -935,9 +935,9 @@ static void call_flag(App *app) {
 
     app->resigned = true;
     if (white_used >= black_used) {
-        snprintf(app->status, sizeof(app->status), "Flag! White loses on time.");
+        snprintf(app->status, sizeof(app->status), "Flag! White loses on time. Black wins!");
     } else {
-        snprintf(app->status, sizeof(app->status), "Flag! Black loses on time.");
+        snprintf(app->status, sizeof(app->status), "Flag! Black loses on time. White wins!");
     }
     audio_play_resign();
 }
@@ -1616,28 +1616,34 @@ static void handle_engine_select_click(App *app, int px, int py) {
 static void draw_file_dialog(App *app, bool is_save) {
     SDL_Renderer *r = app->renderer;
     sdl_fill_rect(r,0,0,LOGICAL_W,LOGICAL_H,15,15,20,230);
-    render_text_centered(r,g_font_lg,is_save?"Save Game":"Load Game",LOGICAL_W/2,20,255,220,60);
-    int lx=(int)(60*g_scale),ly=(int)(60*g_scale),lw=LOGICAL_W-(int)(120*g_scale),lh=(int)(360*g_scale);
+    render_text_centered(r,g_font_lg,is_save?"Save Game":"Load Game",LOGICAL_W/2,(int)(14*g_scale),255,220,60);
+    int lx = (int)(60*g_scale);
+    int ly = (int)(50*g_scale);
+    int lw = LOGICAL_W - (int)(120*g_scale);
+    int bottom_reserve = is_save ? (int)(90*g_scale) : (int)(40*g_scale);
+    int lh = LOGICAL_H - ly - bottom_reserve;
     sdl_draw_rect(r,lx,ly,lw,lh,80,80,110,255);
-    int visible=lh/((int)(24*g_scale));
+    int row_h = (int)(28*g_scale);
+    int visible = lh / row_h;
     for (int i=0; i<visible && (i+app->fb.scroll)<app->fb.count; i++) {
-        int fi=i+app->fb.scroll; bool sel=(fi==app->fb.selected); int ry=ly+i*48;
-        if (sel) sdl_fill_rect(r,lx+1,ry,lw-2,(int)(24*g_scale),60,80,120,255);
-        render_text(r,g_font_sm,app->fb.entries[fi].name,lx+(int)(10*g_scale),ry+(int)(5*g_scale),
+        int fi=i+app->fb.scroll; bool sel=(fi==app->fb.selected); int ry=ly+i*row_h;
+        if (sel) sdl_fill_rect(r,lx+1,ry,lw-2,row_h,60,80,120,255);
+        render_text(r,g_font_sm,app->fb.entries[fi].name,lx+(int)(10*g_scale),ry+(int)(6*g_scale),
                     sel?255:200,sel?255:200,sel?255:200);
     }
     if (app->fb.count==0)
-        render_text_centered(r,g_font_sm,"(no .sav files found)",LOGICAL_W/2,ly+lh/2-(int)(10*g_scale),140,140,160);
+        render_text_centered(r,g_font_sm,"(no .sav files found)",LOGICAL_W/2,ly+lh/2,140,140,160);
+    int below = ly + lh;
     if (is_save) {
-        render_text(r,g_font_sm,"Filename:",lx,ly+lh+(int)(16*g_scale),180,180,180);
-        sdl_draw_rect(r,lx,ly+lh+(int)(32*g_scale),(int)(400*g_scale),(int)(26*g_scale),100,100,140,255);
+        render_text(r,g_font_sm,"Filename:",lx,below+(int)(10*g_scale),180,180,180);
+        sdl_draw_rect(r,lx,below+(int)(26*g_scale),(int)(400*g_scale),(int)(26*g_scale),100,100,140,255);
         char disp[260]; snprintf(disp,sizeof(disp),"%s_",app->fb_input);
-        render_text(r,g_font_sm,disp,lx+(int)(6*g_scale),ly+lh+(int)(37*g_scale),220,220,100);
+        render_text(r,g_font_sm,disp,lx+(int)(6*g_scale),below+(int)(31*g_scale),220,220,100);
     }
     render_text(r,g_font_sm,
                 is_save?"Enter: Save    Esc: Cancel    Up/Down: Browse"
                        :"Enter/dbl-click: Load    Esc: Cancel",
-                lx,ly+lh+62,120,180,120);
+                lx, LOGICAL_H-(int)(18*g_scale), 120,180,120);
 }
 
 static void draw_confirm_new_game(App *app) {
