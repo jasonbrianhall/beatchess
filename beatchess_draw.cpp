@@ -1,6 +1,7 @@
 #include "beatchess.h"
 #include "visualization.h"
-#include "chess_pieces.h"
+#include "chess_pieces_svg.h"
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -356,12 +357,17 @@ void draw_chess_pieces(BeatChessVisualization *chess, cairo_t *cr) {
                 // Scale dance by volume - pieces bounce more with louder music
                 double dance_amount = time_wave * volume * cell * 0.2;
                 
-                // Draw shadow - dark for all pieces
-                cairo_save(cr);
-                cairo_translate(cr, 3, 3);
-                cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
-                draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
-                cairo_restore(cr);
+                // Draw shadow (sprite mode only — draw_geometric_piece sets
+                // its own fill colors internally, so this would just draw a
+                // second full-opacity piece offset by 3px instead of a soft
+                // shadow underneath it)
+                if (use_sprites) {
+                    cairo_save(cr);
+                    cairo_translate(cr, 3, 3);
+                    cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
+                    draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
+                    cairo_restore(cr);
+                }
                 
                 // Draw piece
                 draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
@@ -394,12 +400,14 @@ void draw_chess_pieces(BeatChessVisualization *chess, cairo_t *cr) {
         // Animating piece dances even more to the music
         double dance_amount = sin(chess->time_since_last_move * 15.0) * volume * cell * 0.3;
         
-        // Draw shadow - dark for all pieces
-        cairo_save(cr);
-        cairo_translate(cr, 3, 3);
-        cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
-        draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
-        cairo_restore(cr);
+        // Draw shadow (sprite mode only — see comment on the other shadow pass above)
+        if (use_sprites) {
+            cairo_save(cr);
+            cairo_translate(cr, 3, 3);
+            cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
+            draw_piece(cr, piece.type, piece.color, x, y, cell, dance_amount);
+            cairo_restore(cr);
+        }
         
         // Draw piece with slight glow
         cairo_save(cr);
@@ -450,79 +458,44 @@ void draw_chess_last_move_highlight(BeatChessVisualization *chess, cairo_t *cr) 
 // SPRITE RENDERING FUNCTIONS
 // ============================================================================
 
-// Helper function to load BMP data into a cairo surface
-static cairo_surface_t* create_surface_from_bmp_data(const unsigned char* bmp_data, size_t data_size) {
-    // Create a surface from the BMP data
-    // BMP files start with 0x424D ("BM")
-    if (data_size < 54 || bmp_data[0] != 0x42 || bmp_data[1] != 0x4D) {
+// Helper function to load SVG data into a cairo surface via GdkPixbufLoader.
+// This uses the "svg" gdk-pixbuf loader module (backed by librsvg), which
+// every GTK3 install already ships since GTK itself needs it for icon
+// themes — no extra dependency beyond what this app already links against.
+static cairo_surface_t* create_surface_from_svg_data(const unsigned char* svg_data, size_t data_size) {
+    GdkPixbufLoader *loader = gdk_pixbuf_loader_new_with_type("svg", NULL);
+    if (!loader) {
         return NULL;
     }
-    
-    // Parse BMP header
-    uint32_t offset = *(uint32_t*)(bmp_data + 10);  // Pixel data offset
-    int32_t width = *(int32_t*)(bmp_data + 18);
-    int32_t height = *(int32_t*)(bmp_data + 22);
-    uint16_t bits_per_pixel = *(uint16_t*)(bmp_data + 28);
-    
-    if (width <= 0 || height <= 0 || (bits_per_pixel != 24 && bits_per_pixel != 32)) {
+
+    GError *error = NULL;
+    if (!gdk_pixbuf_loader_write(loader, svg_data, data_size, &error)) {
+        printf("Chess sprite: SVG load failed: %s\n", error ? error->message : "unknown error");
+        if (error) g_error_free(error);
+        gdk_pixbuf_loader_close(loader, NULL);
+        g_object_unref(loader);
         return NULL;
     }
-    
-    // Create image surface (RGBA)
-    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, abs(height));
-    if (!surface) {
+
+    if (!gdk_pixbuf_loader_close(loader, &error)) {
+        printf("Chess sprite: SVG close failed: %s\n", error ? error->message : "unknown error");
+        if (error) g_error_free(error);
+        g_object_unref(loader);
         return NULL;
     }
-    
-    unsigned char* surface_data = cairo_image_surface_get_data(surface);
-    int stride = cairo_image_surface_get_stride(surface);
-    
-    // Convert BMP to RGBA
-    // BMP is BGR bottom-up, Cairo is ARGB top-down
-    int bytes_per_pixel_bmp = bits_per_pixel / 8;
-    int scan_line_size = ((width * bits_per_pixel + 31) / 32) * 4;  // BMP scanlines are padded to 4-byte boundary
-    
-    // Process each pixel
-    for (int y = 0; y < abs(height); y++) {
-        for (int x = 0; x < width; x++) {
-            // BMP coordinates (bottom-up)
-            int bmp_y = (height < 0) ? y : (abs(height) - 1 - y);
-            const unsigned char* bmp_pixel = bmp_data + offset + (bmp_y * scan_line_size) + (x * bytes_per_pixel_bmp);
-            unsigned char* cairo_pixel = surface_data + (y * stride) + (x * 4);
-            
-            unsigned char b = bmp_pixel[0];
-            unsigned char g = bmp_pixel[1];
-            unsigned char r = bmp_pixel[2];
-            unsigned char a = 0xFF;
-            
-            // Detect green pixels as transparent (like DOS version)
-            // Green channel significantly higher than red and blue, and g > 200
-            if (g > r + 30 && g > b + 30 && g > 200) {
-                // Transparent pixel - green background
-                a = 0x00;
-                r = 0;
-                g = 0;
-                b = 0;
-            }
-            
-            // Store in ARGB format (pre-multiplied alpha for Cairo)
-            if (a == 0x00) {
-                // Fully transparent - pre-multiply gives 0
-                cairo_pixel[0] = 0;  // B
-                cairo_pixel[1] = 0;  // G
-                cairo_pixel[2] = 0;  // R
-                cairo_pixel[3] = 0;  // A
-            } else {
-                // Opaque pixel
-                cairo_pixel[0] = b;  // B
-                cairo_pixel[1] = g;  // G
-                cairo_pixel[2] = r;  // R
-                cairo_pixel[3] = a;  // A
-            }
-        }
+
+    GdkPixbuf *pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+    if (!pixbuf) {
+        g_object_unref(loader);
+        return NULL;
     }
-    
-    cairo_surface_mark_dirty(surface);
+
+    // Copies pixel data into a new ARGB32 image surface, already
+    // alpha-premultiplied for Cairo — real alpha from the SVG, no
+    // green-screen chroma-keying needed like the old BMP path required.
+    cairo_surface_t *surface = gdk_cairo_surface_create_from_pixbuf(pixbuf, 1, NULL);
+
+    g_object_unref(loader);  // also releases the pixbuf (loader owns the only ref)
     return surface;
 }
 
@@ -552,29 +525,25 @@ static cairo_surface_t* get_sprite_surface(PieceType type, ChessColor color) {
 
 // Initialize sprite cache
 void init_sprite_cache() {
-    // Map piece types to their BMP data
+    // Map piece types to their SVG data. Same BLACK-first, WHITE-second
+    // ordering per type as before, so get_sprite_surface()'s index formula
+    // ((type - 1) * 2 + (color == WHITE ? 1 : 0)) doesn't need to change.
     const struct {
         const unsigned char* data;
         size_t size;
-    } piece_bmps[] = {
-        {black_pawn_bmp, sizeof(black_pawn_bmp)},
-        {white_pawn_bmp, sizeof(white_pawn_bmp)},
-        {black_knight_bmp, sizeof(black_knight_bmp)},
-        {white_knight_bmp, sizeof(white_knight_bmp)},
-        {black_bishop_bmp, sizeof(black_bishop_bmp)},
-        {white_bishop_bmp, sizeof(white_bishop_bmp)},
-        {black_rook_bmp, sizeof(black_rook_bmp)},
-        {white_rook_bmp, sizeof(white_rook_bmp)},
-        {black_queen_bmp, sizeof(black_queen_bmp)},
-        {white_queen_bmp, sizeof(white_queen_bmp)},
-        {black_king_bmp, sizeof(black_king_bmp)},
-        {white_king_bmp, sizeof(white_king_bmp)},
+    } piece_svgs[] = {
+        {bP_svg, bP_svg_len}, {wP_svg, wP_svg_len},
+        {bN_svg, bN_svg_len}, {wN_svg, wN_svg_len},
+        {bB_svg, bB_svg_len}, {wB_svg, wB_svg_len},
+        {bR_svg, bR_svg_len}, {wR_svg, wR_svg_len},
+        {bQ_svg, bQ_svg_len}, {wQ_svg, wQ_svg_len},
+        {bK_svg, bK_svg_len}, {wK_svg, wK_svg_len},
     };
     
     for (int i = 0; i < 12; i++) {
-        sprite_cache.surfaces[i] = create_surface_from_bmp_data(
-            piece_bmps[i].data,
-            piece_bmps[i].size
+        sprite_cache.surfaces[i] = create_surface_from_svg_data(
+            piece_svgs[i].data,
+            piece_svgs[i].size
         );
     }
     

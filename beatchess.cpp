@@ -1881,7 +1881,7 @@ void init_beat_chess_system(Visualizer *vis) {
         seeded = 1;
     }
     
-    //init_sprite_cache();
+    init_sprite_cache();
     //set_rendering_mode(true); 
     
     // Initialize game
