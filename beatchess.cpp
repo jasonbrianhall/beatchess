@@ -2382,11 +2382,11 @@ void update_beat_chess(void *vis_ptr, double dt) {
     chess->render_mode_button_was_pressed = render_mode_is_pressed;
     
     // Handle the click if it happened
-    /*if (render_mode_clicked) {
+    if (render_mode_clicked) {
         // Toggle between sprites and geometric rendering
         toggle_sprite_mode();
         chess->render_mode_button_glow = 1.0;
-    }*/
+    }
     
     // Decay glow effect
     chess->render_mode_button_glow *= 0.95;
