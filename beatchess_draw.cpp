@@ -357,11 +357,11 @@ void draw_chess_pieces(BeatChessVisualization *chess, cairo_t *cr) {
                 // Scale dance by volume - pieces bounce more with louder music
                 double dance_amount = time_wave * volume * cell * 0.2;
                 
-                // Draw shadow (sprite mode only — draw_geometric_piece sets
-                // its own fill colors internally, so this would just draw a
-                // second full-opacity piece offset by 3px instead of a soft
-                // shadow underneath it)
-                if (use_sprites) {
+                // Draw shadow (geometric mode only — this doesn't behave as
+                // a true soft shadow, it's a second full-opacity piece drawn
+                // 3px offset, but that reads fine for solid geometric shapes.
+                // For sprites it looks like ghosting, so skip it there.)
+                if (!use_sprites) {
                     cairo_save(cr);
                     cairo_translate(cr, 3, 3);
                     cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
@@ -400,8 +400,8 @@ void draw_chess_pieces(BeatChessVisualization *chess, cairo_t *cr) {
         // Animating piece dances even more to the music
         double dance_amount = sin(chess->time_since_last_move * 15.0) * volume * cell * 0.3;
         
-        // Draw shadow (sprite mode only — see comment on the other shadow pass above)
-        if (use_sprites) {
+        // Draw shadow (geometric mode only — see comment on the other shadow pass above)
+        if (!use_sprites) {
             cairo_save(cr);
             cairo_translate(cr, 3, 3);
             cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
