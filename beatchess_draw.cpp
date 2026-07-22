@@ -849,6 +849,95 @@ void draw_chess_render_mode_button(BeatChessVisualization *chess, cairo_t *cr, i
     cairo_show_text(cr, button_text);
 }
 
+void draw_chess_color_choice_overlay(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
+    if (!chess->choosing_color) return;
+
+    // Dim the board behind the overlay.
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.75);
+    cairo_rectangle(cr, 0, 0, width, height);
+    cairo_fill(cr);
+
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 20);
+    const char *prompt = "Play as:";
+    cairo_text_extents_t prompt_extents;
+    cairo_text_extents(cr, prompt, &prompt_extents);
+    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+    cairo_move_to(cr, (width - prompt_extents.width) / 2, height / 2 - 60);
+    cairo_show_text(cr, prompt);
+
+    double button_width = 140;
+    double button_height = 50;
+    double spacing = 20;
+    double total_width = button_width * 2 + spacing;
+    double buttons_y = height / 2 - button_height / 2;
+
+    // --- White button ---
+    double white_x = (width - total_width) / 2;
+    chess->choose_white_button_x = white_x;
+    chess->choose_white_button_y = buttons_y;
+    chess->choose_white_button_width = button_width;
+    chess->choose_white_button_height = button_height;
+
+    cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+    cairo_rectangle(cr, white_x, buttons_y, button_width, button_height);
+    cairo_fill(cr);
+
+    if (chess->choose_white_button_hovered) {
+        cairo_set_source_rgba(cr, 1.0, 0.7, 0.2, 0.5);
+        cairo_rectangle(cr, white_x - 3, buttons_y - 3, button_width + 6, button_height + 6);
+        cairo_stroke(cr);
+    }
+
+    cairo_set_source_rgb(cr, chess->choose_white_button_hovered ? 1.0 : 0.3,
+                         chess->choose_white_button_hovered ? 0.7 : 0.3,
+                         chess->choose_white_button_hovered ? 0.2 : 0.3);
+    cairo_set_line_width(cr, 2);
+    cairo_rectangle(cr, white_x, buttons_y, button_width, button_height);
+    cairo_stroke(cr);
+
+    cairo_set_font_size(cr, 16);
+    const char *white_text = "White";
+    cairo_text_extents_t white_extents;
+    cairo_text_extents(cr, white_text, &white_extents);
+    cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+    cairo_move_to(cr, white_x + (button_width - white_extents.width) / 2,
+                  buttons_y + (button_height + white_extents.height) / 2);
+    cairo_show_text(cr, white_text);
+
+    // --- Black button ---
+    double black_x = white_x + button_width + spacing;
+    chess->choose_black_button_x = black_x;
+    chess->choose_black_button_y = buttons_y;
+    chess->choose_black_button_width = button_width;
+    chess->choose_black_button_height = button_height;
+
+    cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);
+    cairo_rectangle(cr, black_x, buttons_y, button_width, button_height);
+    cairo_fill(cr);
+
+    if (chess->choose_black_button_hovered) {
+        cairo_set_source_rgba(cr, 1.0, 0.7, 0.2, 0.5);
+        cairo_rectangle(cr, black_x - 3, buttons_y - 3, button_width + 6, button_height + 6);
+        cairo_stroke(cr);
+    }
+
+    cairo_set_source_rgb(cr, chess->choose_black_button_hovered ? 1.0 : 0.7,
+                         chess->choose_black_button_hovered ? 0.7 : 0.5,
+                         chess->choose_black_button_hovered ? 0.2 : 0.5);
+    cairo_set_line_width(cr, 2);
+    cairo_rectangle(cr, black_x, buttons_y, button_width, button_height);
+    cairo_stroke(cr);
+
+    const char *black_text = "Black";
+    cairo_text_extents_t black_extents;
+    cairo_text_extents(cr, black_text, &black_extents);
+    cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+    cairo_move_to(cr, black_x + (button_width - black_extents.width) / 2,
+                  buttons_y + (button_height + black_extents.height) / 2);
+    cairo_show_text(cr, black_text);
+}
+
 void draw_beat_chess(void *vis_ptr, cairo_t *cr) {
     Visualizer *vis = (Visualizer*)vis_ptr;
     BeatChessVisualization *chess = &vis->beat_chess;
@@ -876,6 +965,7 @@ void draw_beat_chess(void *vis_ptr, cairo_t *cr) {
     draw_chess_flip_button(chess, cr, width, height);
     draw_chess_undo_button(chess, cr, width, height);
     draw_chess_render_mode_button(chess, cr, width, height);
+    draw_chess_color_choice_overlay(chess, cr, width, height);
 }
 
 void draw_chess_flip_button(BeatChessVisualization *chess, cairo_t *cr, int width, int height) {
