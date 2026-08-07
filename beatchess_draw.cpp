@@ -462,6 +462,52 @@ void draw_chess_last_move_highlight(BeatChessVisualization *chess, cairo_t *cr) 
 // This uses the "svg" gdk-pixbuf loader module (backed by librsvg), which
 // every GTK3 install already ships since GTK itself needs it for icon
 // themes — no extra dependency beyond what this app already links against.
+// gdk_cairo_surface_create_from_pixbuf() is GDK3-only (removed entirely in
+// GDK4, no direct replacement). This does the same conversion by hand using
+// only GdkPixbuf accessors and the Cairo image-surface API, both of which
+// are stable across GTK3/GTK4, so it builds and behaves identically under
+// either - no #ifdef needed to keep both versions working.
+static cairo_surface_t* pixbuf_to_cairo_surface(GdkPixbuf *pixbuf) {
+    int width = gdk_pixbuf_get_width(pixbuf);
+    int height = gdk_pixbuf_get_height(pixbuf);
+    int n_channels = gdk_pixbuf_get_n_channels(pixbuf);
+    int pixbuf_stride = gdk_pixbuf_get_rowstride(pixbuf);
+    const guchar *pixels = gdk_pixbuf_get_pixels(pixbuf);
+    gboolean has_alpha = gdk_pixbuf_get_has_alpha(pixbuf);
+
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(surface);
+        return NULL;
+    }
+
+    int cairo_stride = cairo_image_surface_get_stride(surface);
+    unsigned char *cairo_data = cairo_image_surface_get_data(surface);
+
+    for (int y = 0; y < height; y++) {
+        const guchar *src_row = pixels + (size_t)y * pixbuf_stride;
+        guint32 *dst_row = (guint32*)(cairo_data + (size_t)y * cairo_stride);
+        for (int x = 0; x < width; x++) {
+            const guchar *src = src_row + (size_t)x * n_channels;
+            guchar r = src[0], g = src[1], b = src[2];
+            guchar a = has_alpha ? src[3] : 255;
+
+            // Cairo's ARGB32 format wants native-endian premultiplied alpha.
+            if (a == 255) {
+                dst_row[x] = ((guint32)a << 24) | ((guint32)r << 16) | ((guint32)g << 8) | b;
+            } else {
+                guchar pr = (guchar)((r * a) / 255);
+                guchar pg = (guchar)((g * a) / 255);
+                guchar pb = (guchar)((b * a) / 255);
+                dst_row[x] = ((guint32)a << 24) | ((guint32)pr << 16) | ((guint32)pg << 8) | pb;
+            }
+        }
+    }
+
+    cairo_surface_mark_dirty(surface);
+    return surface;
+}
+
 static cairo_surface_t* create_surface_from_svg_data(const unsigned char* svg_data, size_t data_size) {
     GdkPixbufLoader *loader = gdk_pixbuf_loader_new_with_type("svg", NULL);
     if (!loader) {
@@ -493,7 +539,7 @@ static cairo_surface_t* create_surface_from_svg_data(const unsigned char* svg_da
     // Copies pixel data into a new ARGB32 image surface, already
     // alpha-premultiplied for Cairo — real alpha from the SVG, no
     // green-screen chroma-keying needed like the old BMP path required.
-    cairo_surface_t *surface = gdk_cairo_surface_create_from_pixbuf(pixbuf, 1, NULL);
+    cairo_surface_t *surface = pixbuf_to_cairo_surface(pixbuf);
 
     g_object_unref(loader);  // also releases the pixbuf (loader owns the only ref)
     return surface;
