@@ -2,6 +2,7 @@
 #include "visualization.h"
 #include "chess_pieces_svg.h"
 #include <gdk-pixbuf/gdk-pixbuf.h>
+#include <SDL2/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -511,12 +512,19 @@ static cairo_surface_t* pixbuf_to_cairo_surface(GdkPixbuf *pixbuf) {
 static cairo_surface_t* create_surface_from_svg_data(const unsigned char* svg_data, size_t data_size) {
     GdkPixbufLoader *loader = gdk_pixbuf_loader_new_with_type("svg", NULL);
     if (!loader) {
+        // This is the case that was failing silently. gdk_pixbuf_loader_new_with_type()
+        // returns NULL when the "svg" gdk-pixbuf loader module isn't registered/found at
+        // runtime (missing loaders.cache entry, missing libpixbufloader-svg.dll, or a
+        // stale cache pointing at build-time paths that don't exist on the deployed
+        // machine) - it does NOT set a GError, so there was previously no way to tell
+        // this apart from every piece just legitimately being blank.
+        SDL_Log("Chess sprite: 'svg' gdk-pixbuf loader module not found - is libpixbufloader-svg.dll present under lib/gdk-pixbuf-2.0/.../loaders/ and is loaders.cache valid for this install location? Falling back to non-sprite rendering.");
         return NULL;
     }
 
     GError *error = NULL;
     if (!gdk_pixbuf_loader_write(loader, svg_data, data_size, &error)) {
-        printf("Chess sprite: SVG load failed: %s\n", error ? error->message : "unknown error");
+        SDL_Log("Chess sprite: SVG load failed: %s", error ? error->message : "unknown error");
         if (error) g_error_free(error);
         gdk_pixbuf_loader_close(loader, NULL);
         g_object_unref(loader);
@@ -524,7 +532,7 @@ static cairo_surface_t* create_surface_from_svg_data(const unsigned char* svg_da
     }
 
     if (!gdk_pixbuf_loader_close(loader, &error)) {
-        printf("Chess sprite: SVG close failed: %s\n", error ? error->message : "unknown error");
+        SDL_Log("Chess sprite: SVG close failed: %s", error ? error->message : "unknown error");
         if (error) g_error_free(error);
         g_object_unref(loader);
         return NULL;
@@ -594,6 +602,16 @@ void init_sprite_cache() {
     }
     
     sprite_cache.initialized = true;
+
+    int loaded_count = 0;
+    for (int i = 0; i < 12; i++) {
+        if (sprite_cache.surfaces[i]) loaded_count++;
+    }
+    if (loaded_count < 12) {
+        SDL_Log("Chess sprite cache: only %d/12 piece sprites loaded - sprite rendering will fall back to geometric shapes for the rest", loaded_count);
+    } else {
+        SDL_Log("Chess sprite cache: all 12 piece sprites loaded successfully");
+    }
 }
 
 // Clean up sprite cache
@@ -607,12 +625,14 @@ void cleanup_sprite_cache() {
     sprite_cache.initialized = false;
 }
 
-// Draw sprite for a piece
-static void draw_sprite_piece(cairo_t *cr, PieceType type, ChessColor color, 
+// Draw sprite for a piece. Returns true if a sprite was actually drawn,
+// false if no sprite surface was available (caller should fall back to
+// geometric rendering rather than leave a blank square).
+static bool draw_sprite_piece(cairo_t *cr, PieceType type, ChessColor color, 
                              double x, double y, double size) {
     cairo_surface_t* surface = get_sprite_surface(type, color);
     if (!surface) {
-        return;
+        return false;
     }
     
     int sprite_width = cairo_image_surface_get_width(surface);
@@ -630,6 +650,7 @@ static void draw_sprite_piece(cairo_t *cr, PieceType type, ChessColor color,
     cairo_paint(cr);
     
     cairo_restore(cr);
+    return true;
 }
 
 // ============================================================================
@@ -1151,7 +1172,9 @@ void draw_piece(cairo_t *cr, PieceType type, ChessColor color, double x, double 
     
     if (use_sprites) {
         // Try to draw sprite, fall back to geometric if not available
-        draw_sprite_piece(cr, type, color, x, y, size);
+        if (!draw_sprite_piece(cr, type, color, x, y, size)) {
+            draw_geometric_piece(cr, type, color, x, y, size, dance_offset);
+        }
     } else {
         // Draw geometric piece
         draw_geometric_piece(cr, type, color, x, y, size, dance_offset);
